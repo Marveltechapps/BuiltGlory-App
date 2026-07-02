@@ -3,13 +3,15 @@
 # dependencies
 node_modules/
 
-# Expo
+# Expo — local cache, export output, and prebuild artifacts
 .expo/
+.expo-shared/
+.expo-export-check*
 dist/
 web-build/
 expo-env.d.ts
 
-# Native
+# Native signing and credentials (never commit)
 .kotlin/
 *.orig.*
 *.jks
@@ -17,25 +19,48 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+*.pem
 
 # Metro
 .metro-health-check*
 
-# debug
+# debug logs
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+logs/
+*.log
 
-# macOS
+# OS junk
 .DS_Store
-*.pem
+Thumbs.db
 
-# local env files
-.env*.local
+# dotenv — local secrets, examples, and non-production env
+.env
+.env.*
+*.local
+
+# test / coverage
+coverage/
+
+# Non-production — docs, AI assistants, editor config, and API tooling
+docs/
+load-tests/
+AGENTS.md
+CLAUDE.md
+.cursor/
+.claude/
+.vscode/
+.idea/
+postman/
+postman-*
+*.md
+!README.md
+!LICENSE
 
 # typescript
 *.tsbuildinfo
 
-# generated native folders
+# generated native folders (use `npx expo prebuild` locally)
 /ios
 /android
