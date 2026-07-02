@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "174877478760",
+    "project_id": "builtglory-properties",
+    "storage_bucket": "builtglory-properties.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:174877478760:android:80d066db81edde18d550dd",
+        "android_client_info": {
+          "package_name": "com.builtglory.builtglory"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBcD_svELRmwiZ2d0P_gJx0NQo9Nx22vCI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

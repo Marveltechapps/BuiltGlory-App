@@ -1,0 +1,440 @@
+openapi: 3.0.3
+info:
+  title: BuiltGlory App Auth and Profile Picture API
+  version: 1.0.0
+  description: >
+    Import this file into Postman to test the mobile app login OTP flow and
+    profile picture update flow. After verifying OTP, copy data.accessToken to
+    the bearer token auth value and copy data.user._id to ownerId for the
+    profile photo upload request.
+servers:
+  - url: http://192.168.1.10:3000/api/v1
+    description: Local backend on current Wi-Fi
+tags:
+  - name: App Login
+  - name: Profile Picture
+paths:
+  /auth/customer/otp/send:
+    post:
+      tags:
+        - App Login
+      summary: Send customer OTP
+      description: Sends a 6-digit OTP to a customer phone number for app login.
+      operationId: sendCustomerOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendOtpRequest'
+            example:
+              countryCode: '+91'
+              phone: '7418268091'
+              purpose: login
+      responses:
+        '200':
+          description: OTP request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendOtpResponse'
+              example:
+                data:
+                  requestId: 66b9f1d2c8e8b82d3d899111
+                  expiresInSeconds: 300
+                  canResendAt: '2026-06-30T09:25:00.000Z'
+                meta:
+                  requestId: 0f3e2e9a-2c8b-4a2a-9c7d-1a2f3d4e5f60
+        '400':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /auth/customer/otp/verify:
+    post:
+      tags:
+        - App Login
+      summary: Verify customer OTP
+      description: >
+        Verifies the OTP and returns accessToken, refreshToken, and the customer
+        profile. Use data.accessToken as the Bearer token for profile requests.
+      operationId: verifyCustomerOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyOtpRequest'
+            example:
+              countryCode: '+91'
+              phone: '7418268091'
+              otp: '123456'
+              requestId: 66b9f1d2c8e8b82d3d899111
+              purpose: login
+      responses:
+        '200':
+          description: OTP verified and session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyOtpResponse'
+              example:
+                data:
+                  accessToken: paste-access-token-from-real-response
+                  refreshToken: paste-refresh-token-from-real-response
+                  expiresInSeconds: 900
+                  user:
+                    _id: 66b9f1d2c8e8b82d3d899222
+                    phone: '7418268091'
+                    phoneNormalized: '917418268091'
+                    profilePhoto: null
+                meta:
+                  requestId: 71cdb120-79e6-4a8d-87f6-f7b39db47120
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+  /documents:
+    post:
+      tags:
+        - Profile Picture
+      summary: Upload profile picture file
+      description: >
+        Uploads the selected profile picture as a customer document. Set
+        ownerId to data.user._id from the OTP verify response. After this
+        request succeeds, copy data.url into the PATCH /me profilePhoto field.
+      operationId: uploadProfilePictureDocument
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ProfilePictureUploadRequest'
+            encoding:
+              file:
+                contentType: image/jpeg, image/png
+            example:
+              ownerType: user
+              ownerId: 66b9f1d2c8e8b82d3d899222
+              purpose: kyc
+              documentType: profile_photo
+              file: profile-photo.jpg
+      responses:
+        '201':
+          description: Profile picture document uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadDocumentResponse'
+              example:
+                data:
+                  _id: 66b9f1d2c8e8b82d3d899333
+                  referenceId: DOC-000001
+                  ownerType: user
+                  ownerId: 66b9f1d2c8e8b82d3d899222
+                  purpose: kyc
+                  documentType: profile_photo
+                  fileName: profile-photo.jpg
+                  mimeType: image/jpeg
+                  sizeBytes: 123456
+                  url: https://bucket.s3.ap-south-1.amazonaws.com/kyc/user/66b9f1d2c8e8b82d3d899222/profile-photo.jpg
+                  status: uploaded
+                  scanStatus: clean
+                meta:
+                  requestId: 9f3e87ec-2417-4d54-af8f-f992114729b2
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '413':
+          $ref: '#/components/responses/Error'
+  /me:
+    patch:
+      tags:
+        - Profile Picture
+      summary: Update profile picture URL
+      description: >
+        Updates the logged-in customer's profilePhoto field. Use data.url from
+        POST /documents as profilePhoto.
+      operationId: updateCustomerProfilePhoto
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfilePhotoRequest'
+            example:
+              profilePhoto: https://bucket.s3.ap-south-1.amazonaws.com/kyc/user/66b9f1d2c8e8b82d3d899222/profile-photo.jpg
+      responses:
+        '200':
+          description: Customer profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateProfileResponse'
+              example:
+                data:
+                  _id: 66b9f1d2c8e8b82d3d899222
+                  phone: '7418268091'
+                  phoneNormalized: '917418268091'
+                  profilePhoto: https://bucket.s3.ap-south-1.amazonaws.com/kyc/user/66b9f1d2c8e8b82d3d899222/profile-photo.jpg
+                meta:
+                  requestId: 9462bb28-8e9a-42de-84c9-f5b326ad9231
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Error:
+      description: API error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Request validation failed.
+              details:
+                - field: phone
+                  message: '"phone" must match required pattern'
+            meta:
+              requestId: e59c24fd-cb30-4d1b-a197-c30a5a5d4c87
+  schemas:
+    SendOtpRequest:
+      type: object
+      required:
+        - phone
+      properties:
+        countryCode:
+          type: string
+          default: '+91'
+          example: '+91'
+        phone:
+          type: string
+          pattern: '^\d{10}$'
+          example: '7418268091'
+        purpose:
+          type: string
+          enum:
+            - login
+            - change_phone
+          default: login
+        deviceId:
+          type: string
+          nullable: true
+    VerifyOtpRequest:
+      type: object
+      required:
+        - phone
+        - otp
+      properties:
+        requestId:
+          type: string
+          nullable: true
+        countryCode:
+          type: string
+          default: '+91'
+        phone:
+          type: string
+          pattern: '^\d{10}$'
+        otp:
+          type: string
+          pattern: '^\d{6}$'
+        purpose:
+          type: string
+          enum:
+            - login
+            - change_phone
+          default: login
+    SendOtpResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            requestId:
+              type: string
+            expiresInSeconds:
+              type: integer
+            canResendAt:
+              type: string
+              format: date-time
+        meta:
+          $ref: '#/components/schemas/Meta'
+    VerifyOtpResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            accessToken:
+              type: string
+            refreshToken:
+              type: string
+            expiresInSeconds:
+              type: integer
+            user:
+              $ref: '#/components/schemas/CustomerProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ProfilePictureUploadRequest:
+      type: object
+      required:
+        - ownerType
+        - ownerId
+        - purpose
+        - documentType
+        - file
+      properties:
+        ownerType:
+          type: string
+          enum:
+            - user
+          example: user
+        ownerId:
+          type: string
+          description: Customer user _id from OTP verify response.
+        purpose:
+          type: string
+          enum:
+            - kyc
+          example: kyc
+        documentType:
+          type: string
+          enum:
+            - profile_photo
+          example: profile_photo
+        file:
+          type: string
+          format: binary
+          description: JPG or PNG profile image. Maximum size is 25MB.
+    UploadDocumentResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            _id:
+              type: string
+            id:
+              type: string
+            referenceId:
+              type: string
+            ownerType:
+              type: string
+            ownerId:
+              type: string
+            purpose:
+              type: string
+            documentType:
+              type: string
+            fileName:
+              type: string
+            mimeType:
+              type: string
+            sizeBytes:
+              type: integer
+            url:
+              type: string
+              format: uri
+            status:
+              type: string
+            scanStatus:
+              type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    UpdateProfilePhotoRequest:
+      type: object
+      required:
+        - profilePhoto
+      properties:
+        profilePhoto:
+          type: string
+          format: uri
+          description: URL returned as data.url from POST /documents.
+    UpdateProfileResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CustomerProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    CustomerProfile:
+      type: object
+      properties:
+        _id:
+          type: string
+        id:
+          type: string
+        referenceId:
+          type: string
+        name:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        phone:
+          type: string
+        phoneNormalized:
+          type: string
+        profilePhoto:
+          type: string
+          format: uri
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        state:
+          type: string
+          nullable: true
+        country:
+          type: string
+          nullable: true
+        userType:
+          type: string
+          nullable: true
+          enum:
+            - resident
+            - nri
+            - pio
+        role:
+          type: string
+          nullable: true
+          enum:
+            - buyer
+            - seller
+            - both
+    Meta:
+      type: object
+      properties:
+        requestId:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+        meta:
+          $ref: '#/components/schemas/Meta'

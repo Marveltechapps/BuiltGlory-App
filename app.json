@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "BuiltGlory",
+    "slug": "builtglory",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "AIzaSyAa8QYUOOYJ8QHNxUe3_R3PwxRBRVE51ZY"
+      }
+    },
+    "android": {
+      "package": "com.builtglory.builtglory",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "softwareKeyboardLayoutMode": "resize",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAa8QYUOOYJ8QHNxUe3_R3PwxRBRVE51ZY"
+        }
+      },
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#E6F4FE",
+          "defaultChannel": "default"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow BuiltGlory to access your photos so you can upload property images."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow BuiltGlory to use your location to show nearby properties and save your city."
+        }
+      ]
+    ]
+  }
+}

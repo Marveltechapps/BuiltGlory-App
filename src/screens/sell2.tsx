@@ -1,0 +1,764 @@
+import React, { useEffect, useState } from 'react';
+import { View, Text, Pressable } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import Icon from '../components/Icon';
+import { Screen, TopBar, Field, Input, Btn, DocCard, Toast, useToast, Sheet, SuccessBurst, FadeInView } from '../components/shared';
+import { formatINR } from '../data/data';
+import { useNav } from '../navigation/useNav';
+import { useAppState } from '../state/AppState';
+import {
+  getSellRequest,
+  submitSellerOfferDecision,
+  SellRequest,
+  updateCurrentCustomer,
+  updateSellRequest,
+  uploadCustomerDocument,
+} from '../api/customer';
+import { ctxSellRequestId, sellRequestIdOf, sellRequestTitle, useSellerActivityContext } from './sell';
+
+function apiMessage(error: unknown, fallback = 'Something went wrong. Please try again.') {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function ErrorCard({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <View className="mx-4 p-3 bg-rose-50 border border-rose-200 rounded-card flex-row items-center gap-2">
+      <Icon name="triangle-alert" size={16} color="#E11D48" />
+      <Text className="flex-1 text-[12px] text-rose-700">{message}</Text>
+      {onRetry && <Pressable onPress={onRetry}><Text className="text-[12px] font-semibold text-rose-700">Retry</Text></Pressable>}
+    </View>
+  );
+}
+
+function uploadFileName(asset: ImagePicker.ImagePickerAsset, fallback: string) {
+  const extension = (asset.mimeType || '').split('/')[1] || asset.uri.split('.').pop() || 'jpg';
+  return asset.fileName?.trim() || `${fallback}.${extension}`;
+}
+
+function uploadMimeType(asset: ImagePicker.ImagePickerAsset) {
+  if (asset.mimeType) return asset.mimeType;
+  return asset.uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+}
+
+function useSellRequestContext(ctx: any) {
+  const { authToken } = useAppState();
+  const [request, setRequest] = useState<SellRequest | null>(ctx?.sellRequest ?? ctx?.p ?? null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const sellRequestId = ctxSellRequestId(ctx);
+  const load = async () => {
+    if (!authToken || !sellRequestId) return;
+    setLoading(true);
+    setError('');
+    try {
+      setRequest(await getSellRequest(authToken, sellRequestId));
+    } catch (e) {
+      setError(apiMessage(e, 'Unable to load sell request.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(); }, [authToken, sellRequestId]);
+  return { authToken, request, setRequest, loading, error, load, sellRequestId };
+}
+
+// ─── SL-09 Edit Listing ──────────────────────────────────────
+export function EditListingScreen() {
+  const { go, back, ctx } = useNav();
+  const { authToken, request, setRequest, error, load, sellRequestId } = useSellRequestContext(ctx);
+  const src: any = request || ctx?.p || {};
+  const [data, setData] = useState({
+    title: src.propertyTitle || src.title || '',
+    price: src.askingPrice ? String(src.askingPrice) : src.price ? String(src.price) : '',
+    area: src.specifications?.builtUpArea ? String(src.specifications.builtUpArea) : src.area ? String(src.area) : '',
+    floor: src.specifications?.floor ? String(src.specifications.floor) : src.floor ? String(src.floor) : '',
+  });
+  const [saved, setSaved] = useState(false);
+  const { msg, fire } = useToast();
+  useEffect(() => {
+    if (!request) return;
+    setData({
+      title: request.propertyTitle || '',
+      price: request.askingPrice ? String(request.askingPrice) : '',
+      area: request.specifications?.builtUpArea ? String(request.specifications.builtUpArea) : '',
+      floor: typeof request.specifications?.floor === 'string' ? request.specifications.floor : '',
+    });
+  }, [request]);
+  const save = async () => {
+    if (!authToken || !sellRequestId) {
+      fire('Please sign in again before saving.');
+      return;
+    }
+    setSaved(true);
+    try {
+      const updated = await updateSellRequest(authToken, sellRequestId, {
+        propertyTitle: data.title,
+        askingPrice: Number(data.price),
+        specifications: { ...(request?.specifications ?? {}), builtUpArea: Number(data.area), floor: data.floor },
+      });
+      setRequest(updated);
+      fire('Changes saved!');
+      setTimeout(() => { setSaved(false); go('sellerDashboard'); }, 800);
+    } catch (e) {
+      setSaved(false);
+      fire(apiMessage(e, 'Unable to save changes.'));
+    }
+  };
+  const saveDraft = async () => {
+    if (!authToken || !sellRequestId) {
+      fire('Please sign in again before saving a draft.');
+      return;
+    }
+    try {
+      const updated = await updateSellRequest(authToken, sellRequestId, {
+        propertyTitle: data.title,
+        askingPrice: data.price ? Number(data.price) : undefined,
+        specifications: { ...(request?.specifications ?? {}), builtUpArea: data.area ? Number(data.area) : undefined, floor: data.floor },
+        isDraft: true,
+      });
+      setRequest(updated);
+      go('draftSuccess', { data, sellRequest: updated, sellRequestId: sellRequestIdOf(updated) });
+    } catch (e) {
+      fire(apiMessage(e, 'Unable to save draft.'));
+    }
+  };
+  return (
+    <Screen padBottom>
+      <TopBar onBack={back} title="Edit Listing" sub="Status: Submitted" />
+      {!!error && <ErrorCard message={error} onRetry={load} />}
+      <View className="px-4">
+        <View className="flex-row items-center gap-2 p-3 rounded-card bg-brand-50 mb-4">
+          <Icon name="info" size={14} color="#1A6FFF" /><Text className="text-[12px] text-brand-700 flex-1">You can edit until our team starts the review.</Text>
+        </View>
+        <View className="gap-4">
+          <Field label="Property Title" required><Input value={data.title} onChangeText={(v) => setData({ ...data, title: v })} /></Field>
+          <Field label="Asking Price (₹)" required><Input prefix="₹" keyboardType="numeric" value={data.price} onChangeText={(v) => setData({ ...data, price: v })} /></Field>
+          <View className="flex-row gap-3">
+            <View className="flex-1"><Field label="Built-up Area"><Input keyboardType="numeric" value={data.area} onChangeText={(v) => setData({ ...data, area: v })} /></Field></View>
+            <View className="flex-1"><Field label="Floor"><Input keyboardType="numeric" value={data.floor} onChangeText={(v) => setData({ ...data, floor: v })} /></Field></View>
+          </View>
+          <Pressable onPress={() => go('sellPhotos')} className="w-full flex-row items-center justify-between p-3.5 rounded-card border border-ink-200">
+            <Text className="text-[13px] font-semibold">Photos & Amenities</Text>
+            <Icon name="chevron-right" size={16} color="#94A3B8" />
+          </Pressable>
+        </View>
+      </View>
+      <Toast message={msg} />
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200 gap-2">
+        <Pressable onPress={save} className={`w-full h-12 rounded-xl items-center justify-center flex-row gap-2 ${saved ? 'bg-emerald-500' : 'bg-brand-600'}`}>
+          <Text className="text-white font-semibold text-[15px]">{saved ? 'Saved!' : 'Save Changes'}</Text>
+        </Pressable>
+        <Pressable onPress={saveDraft} className="w-full h-12 rounded-xl items-center justify-center border border-ink-200">
+          <Text className="text-ink-700 font-semibold text-[15px]">Save as Draft</Text>
+        </Pressable>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-08a Draft Save Success ───────────────────────────────
+export function DraftSuccessScreen() {
+  const { go, ctx } = useNav();
+  const draftData = ctx?.sellRequest || ctx?.data || {};
+  return (
+    <Screen fill>
+      <View className="flex-1 items-center justify-center px-6">
+        <SuccessBurst icon="save" color="#3B82F6" bgClassName="bg-blue-50" />
+        <Text className="text-[22px] font-bold text-center">Draft saved successfully</Text>
+        <Text className="text-ink-500 mt-2 max-w-[280px] text-[13px] leading-relaxed text-center">
+          Your listing draft has been saved. You can continue editing it anytime from My Listings.
+        </Text>
+        {(draftData.propertyTitle || draftData.title) && (
+          <View className="mt-6 rounded-card border border-ink-200 p-4 gap-3 w-full">
+            <Text className="text-[12px] text-ink-500 font-semibold uppercase tracking-wider">Draft Details</Text>
+            <FadeInView><Text className="text-[11px] text-ink-500">Property Title</Text><Text className="text-[13px] font-semibold">{draftData.propertyTitle || draftData.title}</Text></FadeInView>
+            {draftData.referenceId && <FadeInView delay={80}><Text className="text-[11px] text-ink-500">Reference</Text><Text className="text-[13px] font-semibold">{draftData.referenceId}</Text></FadeInView>}
+            <View className="flex-row gap-4">
+              {(draftData.askingPrice || draftData.price) && <View><Text className="text-[11px] text-ink-500">Expected Price</Text><Text className="text-[13px] font-semibold text-brand-600">{formatINR(Number(draftData.askingPrice || draftData.price))}</Text></View>}
+              {(draftData.specifications?.builtUpArea || draftData.area) && <View><Text className="text-[11px] text-ink-500">Area (sqft)</Text><Text className="text-[13px] font-semibold">{draftData.specifications?.builtUpArea || draftData.area}</Text></View>}
+            </View>
+          </View>
+        )}
+        <View className="mt-6 flex-row gap-2 w-full">
+          <Btn variant="outline" className="flex-1" onPress={() => go('myListings')}>My Listings</Btn>
+          <Btn className="flex-1" onPress={() => go('home')}>Home</Btn>
+        </View>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-10 Verification & Inspection Status ──────────────────
+export function VerificationStatusScreen() {
+  const { go, back, ctx } = useNav();
+  const { request, error, load } = useSellRequestContext(ctx);
+  const status = request?.status ?? 'draft';
+  const hasChanges = status === 'changes_requested' || !!request?.changeRequests?.length || request?.documents?.some((doc) => doc.status === 'rejected' || doc.status === 'missing');
+  const steps = [
+    { title: 'Submitted', state: status !== 'draft' ? 'done' : 'future', date: request?.submittedAt ? new Date(request.submittedAt).toLocaleDateString() : undefined },
+    { title: 'Verification Call', state: ['under_review', 'accepted', 'approved', 'active', 'negotiating', 'sold', 'changes_requested'].includes(status) ? 'done' : 'future', detail: status === 'under_review' ? 'Builtglory team is reviewing your request.' : undefined },
+    { title: 'Document Verification', state: hasChanges ? 'alert' : ['approved', 'active', 'negotiating', 'sold'].includes(status) ? 'done' : 'future', detail: hasChanges ? (request?.changeRequests?.[0] ?? 'Action needed on documents or listing details.') : undefined, action: 'reupload' },
+    { title: 'Site Inspection', state: ['active', 'negotiating', 'sold'].includes(status) ? 'done' : 'future' },
+    { title: 'Legal Verification', state: ['active', 'negotiating', 'sold'].includes(status) ? 'done' : 'future' },
+    { title: 'Valuation', state: ['negotiating', 'sold'].includes(status) ? 'done' : 'future' },
+  ];
+  const doneCount = steps.filter((step) => step.state === 'done').length;
+  return (
+    <Screen>
+      <TopBar onBack={back} title="Verification Status" sub={sellRequestTitle(request)} />
+      {!!error && <ErrorCard message={error} onRetry={load} />}
+      <View className="px-4">
+        <View className="rounded-card bg-ink-50 p-3 mb-5 flex-row items-center gap-3">
+          <View className="w-11 h-11 rounded-full bg-amber-100 items-center justify-center"><Icon name="clock" size={20} color="#D97706" /></View>
+          <View>
+            <Text className="text-[13px] font-semibold">{status.replace(/_/g, ' ')} · {doneCount} of {steps.length} complete</Text>
+            <Text className="text-[11.5px] text-ink-500">Most listings verify within 24–48 hrs</Text>
+          </View>
+        </View>
+        <View className="gap-2">
+          {steps.map((step, idx) => (
+            <Pressable
+              key={idx}
+              onPress={() => step.action === 'reupload' && go('reupload', { sellRequest: request, sellRequestId: sellRequestIdOf(request) })}
+              className={`p-4 rounded-card border ${step.state === 'done' ? 'border-emerald-200 bg-emerald-50' : step.state === 'alert' ? 'border-amber-200 bg-amber-50' : 'border-ink-200 bg-white'}`}
+            >
+              <View className="flex-row items-start gap-3">
+                <View className={`w-7 h-7 rounded-full items-center justify-center ${step.state === 'done' ? 'bg-emerald-500' : step.state === 'alert' ? 'bg-amber-500' : 'bg-ink-200'}`}>
+                  <Text className={`text-[12px] font-bold ${step.state === 'future' ? 'text-ink-600' : 'text-white'}`}>{step.state === 'done' ? '✓' : step.state === 'alert' ? '!' : idx + 1}</Text>
+                </View>
+                <View className="flex-1">
+                  <Text className="text-[14px] font-semibold text-ink-900">{step.title}</Text>
+                  {step.date && <Text className="text-[11px] text-ink-500 mt-0.5">{step.date}</Text>}
+                  {step.detail && <Text className="text-[12px] text-ink-700 mt-1">{step.detail}</Text>}
+                </View>
+                <Icon name="chevron-right" size={16} color="#94A3B8" />
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-11 Listing Re-upload ─────────────────────────────────
+export function ReuploadScreen() {
+  const { back, ctx } = useNav();
+  const { authToken, request, setRequest, error, load, sellRequestId } = useSellRequestContext(ctx);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [uploadedDocs, setUploadedDocs] = useState<Record<string, any>>({});
+  const flaggedDocs = request?.documents?.filter((doc) => doc.status === 'rejected' || doc.status === 'missing') ?? [];
+  const flagged = flaggedDocs.length
+    ? flaggedDocs.map((doc, index) => ({ id: doc.name || `doc-${index}`, name: doc.name || `Document ${index + 1}`, reason: doc.rejectionReason || 'Please re-upload this document clearly.' }))
+    : (request?.changeRequests ?? ['Please re-upload requested seller documents.']).map((reason, index) => ({ id: `change-${index}`, name: `Requested document ${index + 1}`, reason }));
+  const allDone = flagged.length > 0 && flagged.every((item) => uploadedDocs[item.id]);
+  const pickDocument = async (item: { id: string; name: string }) => {
+    if (!authToken || !sellRequestId) {
+      setSaveError('Please sign in again before uploading documents.');
+      return;
+    }
+    setSaveError('');
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setSaveError('Photo library permission is required to upload this document.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      allowsEditing: false,
+      quality: 0.9,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    setSaving(true);
+    try {
+      const uploaded = await uploadCustomerDocument(authToken, {
+        ownerType: 'sell_request',
+        ownerId: sellRequestId,
+        purpose: 'property_media',
+        documentType: item.name,
+        file: {
+          uri: asset.uri,
+          name: uploadFileName(asset, item.id),
+          type: uploadMimeType(asset),
+        },
+      });
+      setUploadedDocs((current) => ({ ...current, [item.id]: uploaded }));
+    } catch (e) {
+      setSaveError(apiMessage(e, 'Unable to upload this document.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const submit = async () => {
+    if (saving || !authToken || !sellRequestId || !allDone) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      const replacementDocs = flagged.map((item) => {
+        const doc = uploadedDocs[item.id];
+        return {
+          documentId: doc?._id ?? doc?.id,
+          name: item.name,
+          status: doc?.status === 'uploaded' ? 'uploaded' : 'pending',
+          scanStatus: doc?.scanStatus,
+          fileUrl: doc?.url,
+          uploadedAt: new Date().toISOString(),
+        };
+      });
+      const existingDocs = (request?.documents ?? []).filter((doc) => !flagged.some((item) => item.name === doc.name));
+      const updated = await updateSellRequest(authToken, sellRequestId, {
+        documents: [...existingDocs, ...replacementDocs],
+        changeRequests: [],
+      });
+      setRequest(updated);
+      back();
+    } catch (e) {
+      setSaveError(apiMessage(e, 'Unable to submit re-uploaded documents.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Screen padBottom>
+      <TopBar onBack={back} title="Re-upload Documents" />
+      {!!error && <ErrorCard message={error} onRetry={load} />}
+      {!!saveError && <ErrorCard message={saveError} />}
+      <View className="px-4">
+        <View className="flex-row items-center gap-2 p-3 rounded-card bg-amber-50 border border-amber-200 mb-4">
+          <Icon name="triangle-alert" size={14} color="#D97706" /><Text className="text-[12px] text-amber-800 flex-1">Only flagged documents need re-uploading. Uploaded files are attached to this sell request for review.</Text>
+        </View>
+        <View className="gap-3">
+          {flagged.map((f) => (
+            <DocCard
+              key={f.id}
+              name={f.name}
+              meta={uploadedDocs[f.id] ? 'Uploaded for review' : 'Upload required'}
+              flagged
+              reason={f.reason}
+              action={
+                <View className="px-3 pb-3">
+                  <Pressable onPress={() => pickDocument(f)} disabled={saving} className="w-full h-10 rounded-card bg-brand-50 items-center justify-center flex-row gap-2">
+                    <Text className="font-semibold text-[13px] text-brand-700">{uploadedDocs[f.id] ? 'Replace upload' : 'Upload document'}</Text>
+                  </Pressable>
+                </View>
+              }
+            />
+          ))}
+        </View>
+      </View>
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
+        <Pressable onPress={submit} disabled={!allDone || saving} className={`w-full h-12 rounded-xl items-center justify-center ${allDone && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+          <Text className={`font-semibold text-[15px] ${allDone && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Submitting...' : 'Submit for Re-verification'}</Text>
+        </Pressable>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-12 Offer Screen ───────────────────────────────────────
+export function OfferScreen() {
+  const { go, back, ctx } = useNav();
+  const { activity, request, loading, error, load, sellRequestId } = useSellerActivityContext(ctx);
+  const initialExpirySeconds = Math.max(
+    0,
+    Math.floor((new Date((activity as any)?.offer?.expiresAt ?? 0).getTime() - Date.now()) / 1000),
+  );
+  const [secs, setSecs] = useState(initialExpirySeconds);
+  useEffect(() => {
+    const nextSecs = Math.max(
+      0,
+      Math.floor((new Date((activity as any)?.offer?.expiresAt ?? 0).getTime() - Date.now()) / 1000),
+    );
+    setSecs(nextSecs);
+  }, [(activity as any)?.offer?.expiresAt]);
+  useEffect(() => {
+    if (secs <= 0) return;
+    const t = setInterval(() => setSecs((s) => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(t);
+  }, [secs > 0]);
+  const hh = Math.floor(secs / 3600), mm = Math.floor((secs % 3600) / 60), ss = secs % 60;
+  const offerAmount = activity?.offer?.amount || request?.sale?.salePrice || request?.askingPrice || 0;
+  return (
+    <Screen padBottom>
+      <TopBar onBack={back} title="Builtglory Offer" sub={sellRequestTitle(request)} />
+      {!!error && <ErrorCard message={error} onRetry={load} />}
+      {loading && <View className="px-4"><Text className="text-[12px] text-ink-500 mb-3">Loading offer details...</Text></View>}
+      <View className="px-4">
+        <View className="rounded-card border-2 border-brand-600 p-5 items-center mb-4">
+          <Text className="text-[12px] text-ink-500 uppercase tracking-wider">Our offer for your property</Text>
+          <Text className="text-[40px] font-bold text-brand-600 leading-tight mt-1">{offerAmount ? formatINR(offerAmount) : 'Pending'}</Text>
+          <View className="flex-row items-center gap-1 bg-emerald-50 px-2 py-1 rounded-full mt-2">
+            <Icon name="trending-up" size={12} color="#10B981" /><Text className="text-[11.5px] text-emerald-700">{activity?.offer?.status ?? request?.status ?? 'pending'} status</Text>
+          </View>
+        </View>
+        <View className="rounded-card bg-ink-900 p-4 mb-4">
+          <Text className="text-[11px] text-white/60 uppercase tracking-wider text-center mb-2">Offer expires in</Text>
+          <View className="flex-row justify-center gap-2">
+            {[[hh, 'hrs'], [mm, 'min'], [ss, 'sec']].map(([v, l]) => (
+              <View key={l as string} className="bg-white/10 rounded-md px-3 py-2 items-center" style={{ minWidth: 56 }}>
+                <Text className="text-white text-[22px] font-bold leading-none">{String(v).padStart(2, '0')}</Text>
+                <Text className="text-white/60 text-[9px] mt-1">{l}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+        <View className="rounded-card bg-ink-50 p-3"><Text className="text-[12px] text-ink-600 leading-relaxed">This offer is loaded from your Builtglory acquisition workflow and reflects the latest valuation or negotiated amount.</Text></View>
+      </View>
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200 flex-row gap-2">
+        <Btn variant="outline" className="flex-1" disabled={!offerAmount} onPress={() => go('acceptNegotiate', { mode: 'negotiate', sellRequest: request, sellRequestId, sellerActivity: activity, offerAmount })}>Negotiate</Btn>
+        <Pressable disabled={!offerAmount} onPress={() => go('acceptNegotiate', { mode: 'accept', sellRequest: request, sellRequestId, sellerActivity: activity, offerAmount })} className={`flex-1 h-[52px] rounded-card items-center justify-center ${offerAmount ? 'bg-emerald-600' : 'bg-ink-100'}`}>
+          <Text className="text-white font-semibold text-[15px]">Accept Offer</Text>
+        </Pressable>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-13 Accept / Negotiate ────────────────────────────────
+export function AcceptNegotiateScreen() {
+  const { go, back, ctx } = useNav();
+  const { authToken } = useAppState();
+  const mode = ctx?.mode || 'negotiate';
+  const [counter, setCounter] = useState('');
+  const [notes, setNotes] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const offerAmount = Number(ctx?.offerAmount || ctx?.sellerActivity?.offer?.amount || ctx?.sellRequest?.sale?.salePrice || ctx?.sellRequest?.askingPrice || 0);
+  const requestNegotiationCallback = async (decision: 'accept' | 'negotiate') => {
+    const sellRequestId = ctxSellRequestId(ctx);
+    if (!authToken || !sellRequestId) {
+      setError('Please sign in again before requesting negotiation support.');
+      return;
+    }
+    if (decision === 'negotiate' && !(Number(counter) > 0)) {
+      setError('Enter a valid counter offer.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const activity = await submitSellerOfferDecision(authToken, sellRequestId, decision === 'accept'
+        ? { decision: 'accepted', notes: notes || null }
+        : { decision: 'countered', counterAmount: Number(counter), notes: notes || null });
+      if (decision === 'accept') go('dealConfirmed', { ...ctx, offerAmount: activity.offer?.amount || offerAmount, sellerActivity: activity, sellRequest: activity.sellRequest, sellRequestId });
+      else setSubmitted(true);
+    } catch (e) {
+      setError(apiMessage(e, 'Unable to request negotiation support.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (mode === 'accept') {
+    return (
+      <Screen>
+        <TopBar onBack={back} title="Accept Offer" />
+        {!!error && <ErrorCard message={error} />}
+        <View className="px-4">
+          <View className="rounded-card border border-ink-200 p-5 items-center">
+            <Text className="text-[12px] text-ink-500">You are accepting Builtglory's offer of</Text>
+            <Text className="text-[32px] font-bold text-brand-600 mt-1">{formatINR(offerAmount)}</Text>
+          </View>
+          <View className="mt-4 p-3 rounded-card bg-ink-50"><Text className="text-[12px] text-ink-600 leading-relaxed">Once you confirm, we'll generate a term sheet and move to deal confirmation.</Text></View>
+          <Btn className="w-full mt-5" onPress={() => setConfirm(true)}>Confirm & Accept</Btn>
+        </View>
+        {confirm && (
+          <Sheet onClose={() => setConfirm(false)} title="Confirm acceptance?">
+            <Text className="text-[13px] text-ink-500 mb-5">You're accepting {formatINR(offerAmount)} for {sellRequestTitle(ctx?.sellRequest)}. We'll proceed to deal confirmation.</Text>
+            <View className="gap-2">
+              <Btn className="w-full" disabled={saving} onPress={() => requestNegotiationCallback('accept')}>{saving ? 'Accepting...' : 'Yes, Accept Offer'}</Btn>
+              <Pressable onPress={() => setConfirm(false)} className="w-full h-12 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Go Back</Text></Pressable>
+            </View>
+          </Sheet>
+        )}
+      </Screen>
+    );
+  }
+
+  if (submitted) {
+    return (
+      <Screen>
+        <TopBar onBack={() => go('offer')} title="Counter Offer Sent" />
+        <View className="px-4">
+          <View className="rounded-card bg-amber-50 border border-amber-200 p-4 flex-row items-center gap-3">
+            <View className="w-11 h-11 rounded-full bg-amber-100 items-center justify-center"><Icon name="loader-2" size={20} color="#D97706" /></View>
+            <View className="flex-1">
+              <Text className="text-[14px] font-semibold text-amber-900">Negotiation in progress</Text>
+              <Text className="text-[12px] text-amber-700">Your counter of {formatINR(Number(counter) || offerAmount)} was saved to the seller negotiation workflow.</Text>
+            </View>
+          </View>
+          <View className="mt-4 rounded-card border border-ink-200">
+            <View className="flex-row justify-between px-3 py-2.5"><Text className="text-[12px] text-ink-500">Builtglory offer</Text><Text className="text-[13px] font-semibold">{formatINR(offerAmount)}</Text></View>
+            <View className="flex-row justify-between px-3 py-2.5 border-t border-ink-100"><Text className="text-[12px] text-ink-500">Your counter</Text><Text className="text-[13px] font-semibold text-brand-600">{formatINR(Number(counter) || 8800000)}</Text></View>
+          </View>
+          <Btn variant="outline" className="w-full mt-5" onPress={() => go('sellerDashboard')}>Back to My Listings</Btn>
+        </View>
+      </Screen>
+    );
+  }
+
+  return (
+    <Screen padBottom>
+      <TopBar onBack={back} title="Send Counter Offer" />
+      {!!error && <ErrorCard message={error} />}
+      <View className="px-4">
+        <View className="rounded-card bg-ink-50 p-3 mb-4 flex-row justify-between items-center">
+          <Text className="text-[12px] text-ink-500">Builtglory's offer</Text>
+          <Text className="text-[16px] font-bold">{formatINR(offerAmount)}</Text>
+        </View>
+        <Field label="Your counter offer (₹)" required><Input prefix="₹" keyboardType="numeric" placeholder="e.g. 8800000" value={counter} onChangeText={setCounter} /></Field>
+        {!!counter && <Text className="text-[12px] text-brand-700 -mt-2 mb-2">≈ {formatINR(Number(counter))}</Text>}
+        <Field label="Notes (optional)"><Input multiline placeholder="Add a note to support your counter offer…" value={notes} onChangeText={setNotes} /></Field>
+      </View>
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
+        <Pressable onPress={() => counter && requestNegotiationCallback('negotiate')} disabled={!counter || saving} className={`w-full h-12 rounded-xl items-center justify-center ${counter && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+          <Text className={`font-semibold text-[15px] ${counter && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Submitting...' : 'Submit Counter Offer'}</Text>
+        </Pressable>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-14 Deal Confirmed + Bank Details ─────────────────────
+export function DealConfirmedScreen() {
+  const { go, back, ctx } = useNav();
+  const { authToken, request } = useSellRequestContext(ctx);
+  const [bank, setBank] = useState({ holder: '', name: '', acc: '', accConfirm: '', ifsc: '', branch: '', upi: '' });
+  const [confirmedDeal, setConfirmedDeal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const set = (k: string, v: string) => setBank((b) => ({ ...b, [k]: v }));
+  const accMatch = bank.acc && bank.acc === bank.accConfirm;
+  const valid = bank.holder && bank.name && accMatch && bank.ifsc.length >= 6;
+  const offerAmount = Number(ctx?.offerAmount || request?.sale?.salePrice || request?.askingPrice || 0);
+  const saveBankDetails = async () => {
+    if (!authToken || !valid || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await updateCurrentCustomer(authToken, {
+        bankDetails: {
+          accountHolderName: bank.holder,
+          bankName: bank.name,
+          accountNumberLast4: bank.acc.slice(-4),
+          ifsc: bank.ifsc,
+          branch: bank.branch || null,
+          upiId: bank.upi || null,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      go('paymentSchedule', { ...ctx, offerAmount, sellRequest: request, sellRequestId: ctxSellRequestId(ctx) });
+    } catch (e) {
+      setError(apiMessage(e, 'Unable to save bank details.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Screen padBottom>
+      <TopBar onBack={back} title="Deal Confirmed" />
+      {!!error && <ErrorCard message={error} />}
+      <View className="px-4">
+        <View className="rounded-card border border-emerald-200 bg-emerald-50/40 p-4 mb-5">
+          <View className="flex-row items-center gap-2 mb-3"><Icon name="circle-check" size={18} color="#10B981" /><Text className="text-[14px] font-bold text-emerald-800">Deal agreed</Text></View>
+          <View className="gap-2.5">
+            <View className="flex-row justify-between"><Text className="text-[12px] text-ink-500">Final agreed price</Text><Text className="text-[15px] font-bold">{formatINR(offerAmount)}</Text></View>
+            <Pressable className="flex-row items-center gap-2 px-3 py-2.5 rounded-card bg-white border border-ink-200" onPress={() => go('pdfViewer', { doc: { name: 'Term Sheet' }, from: 'dealConfirmed' })}>
+              <Icon name="file-text" size={16} color="#E11D48" /><Text className="flex-1 text-[13px] font-semibold">Term Sheet.pdf</Text><Icon name="chevron-right" size={15} color="#94A3B8" />
+            </Pressable>
+            <View className="flex-row justify-between"><Text className="text-[12px] text-ink-500">Expected timeline</Text><Text className="text-[13px] font-semibold">21–30 days</Text></View>
+          </View>
+          {!confirmedDeal ? (
+            <Btn className="w-full mt-3" size="sm" onPress={() => setConfirmedDeal(true)}>Confirm Deal</Btn>
+          ) : (
+            <View className="mt-3 flex-row items-center gap-1.5"><Icon name="check-circle" size={14} color="#10B981" /><Text className="text-[12px] text-emerald-700 font-semibold">Deal confirmed — now add your bank details</Text></View>
+          )}
+        </View>
+        <Text className="text-[14px] font-semibold mb-3">Your bank details for payout</Text>
+        <View className="gap-3">
+          <Field label="Account Holder Name" required><Input value={bank.holder} onChangeText={(v) => set('holder', v)} placeholder="As per bank records" /></Field>
+          <Field label="Bank Name" required><Input value={bank.name} onChangeText={(v) => set('name', v)} placeholder="e.g. HDFC Bank" /></Field>
+          <Field label="Account Number" required><Input keyboardType="numeric" value={bank.acc} onChangeText={(v) => set('acc', v)} placeholder="Enter account number" /></Field>
+          <Field label="Confirm Account Number" required>
+            <Input keyboardType="numeric" value={bank.accConfirm} onChangeText={(v) => set('accConfirm', v)} placeholder="Re-enter account number" />
+            {!!bank.accConfirm && !accMatch && <Text className="text-[11px] text-rose-500 mt-1.5">Account numbers don't match</Text>}
+          </Field>
+          <Field label="IFSC Code" required><Input value={bank.ifsc} onChangeText={(v) => set('ifsc', v.toUpperCase())} placeholder="e.g. HDFC0001234" /></Field>
+          <View className="flex-row gap-3">
+            <View className="flex-1"><Field label="Branch (optional)"><Input value={bank.branch} onChangeText={(v) => set('branch', v)} /></Field></View>
+            <View className="flex-1"><Field label="UPI ID (optional)"><Input value={bank.upi} onChangeText={(v) => set('upi', v)} /></Field></View>
+          </View>
+        </View>
+      </View>
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
+        <Pressable onPress={saveBankDetails} disabled={!(confirmedDeal && valid) || saving} className={`w-full h-12 rounded-xl items-center justify-center ${confirmedDeal && valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+          <Text className={`font-semibold text-[15px] ${confirmedDeal && valid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Save Bank Details'}</Text>
+        </Pressable>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-15 Payment Schedule ───────────────────────────────────
+export function PaymentScheduleScreen() {
+  const { go, back, ctx } = useNav();
+  const { activity, loading, error, load } = useSellerActivityContext(ctx);
+  const offerAmount = Number(ctx?.offerAmount || activity?.offer?.amount || ctx?.sellRequest?.sale?.salePrice || ctx?.sellRequest?.askingPrice || 0);
+  const schedule = activity?.payoutSchedule ?? [];
+  return (
+    <Screen padBottom>
+      <TopBar onBack={back} title="Payment Schedule" />
+      {!!error && <ErrorCard message={error} onRetry={load} />}
+      {loading && <View className="px-4"><Text className="text-[12px] text-ink-500 mb-2">Loading payout schedule...</Text></View>}
+      <View className="px-4 gap-3">
+        {schedule.length ? schedule.map((item) => (
+          <View key={item.key} className="rounded-card border border-ink-200 p-4">
+            <View className="flex-row items-center justify-between mb-1"><Text className="text-[13px] font-semibold">{item.label}</Text><Text className="text-[16px] font-bold text-brand-600">{formatINR(item.amount)}</Text></View>
+            <Text className="text-[11.5px] text-ink-500">{item.dueLabel || 'Due as per agreement'} · payout status {item.status ?? 'pending'}</Text>
+          </View>
+        )) : (
+          <View className="rounded-card border border-amber-200 bg-amber-50 p-4">
+            <Text className="text-[13px] font-semibold text-amber-900">Payout schedule pending</Text>
+            <Text className="text-[12px] text-amber-800 mt-1">Builtglory will publish the seller payout schedule after the deal terms are finalized.</Text>
+          </View>
+        )}
+        <View className="rounded-card border border-ink-200 p-4 flex-row items-center justify-between">
+          <Text className="text-[13px] font-semibold">Payment Mode</Text>
+          <Text className="text-[13px] text-ink-700">Bank Transfer (escrow)</Text>
+        </View>
+        <View className="rounded-card bg-ink-900 p-4 flex-row items-center justify-between">
+          <Text className="text-[12px] text-white/70 uppercase tracking-wider">Total</Text>
+          <Text className="text-[22px] font-bold text-white">{formatINR(offerAmount)}</Text>
+        </View>
+      </View>
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
+        <Btn className="w-full" disabled={!schedule.length} onPress={() => go('sellRegistration', { ...ctx, sellerActivity: activity })}>Confirm Schedule</Btn>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-16 Registration Appointment ──────────────────────────
+export function SellRegistrationScreen() {
+  const { go, back, ctx } = useNav();
+  const { activity, request, error, load } = useSellerActivityContext(ctx);
+  const [checks, setChecks] = useState<Record<string, boolean>>({});
+  const appointment = activity?.registration?.appointment ?? ctx?.sellerActivity?.registration?.appointment;
+  const docs = activity?.registration?.checklist ?? [];
+  const allChecked = docs.length > 0 && docs.every((d) => checks[d]);
+  const { msg, fire } = useToast();
+  const appointmentDate = appointment?.date ? new Date(appointment.date).toLocaleDateString() : 'Appointment pending';
+  const appointmentTime = appointment?.time || 'Time pending';
+  const officeName = appointment?.officeName || 'Sub-Registrar Office';
+  const officeAddress = appointment?.address || 'Address will appear once registration is scheduled.';
+  return (
+    <Screen padBottom>
+      <TopBar onBack={back} title="Registration Appointment" />
+      {!!error && <ErrorCard message={error} onRetry={load} />}
+      <View className="px-4">
+        <View className="rounded-card border border-ink-200 overflow-hidden mb-4">
+          <View className="bg-brand-600 px-4 py-3">
+            <Text className="text-[11px] uppercase tracking-wider text-white/80">Appointment</Text>
+            <Text className="text-[20px] font-bold text-white mt-1">{appointmentDate}</Text>
+            <Text className="text-[13px] text-white">{appointmentTime}</Text>
+          </View>
+          <View className="flex-row items-center gap-3 p-3.5">
+            <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center"><Icon name="landmark" size={18} color="#1A6FFF" /></View>
+            <View className="flex-1">
+              <Text className="text-[13px] font-semibold">{officeName}</Text>
+              <Text className="text-[11.5px] text-ink-500">{officeAddress}</Text>
+            </View>
+          </View>
+        </View>
+        <Text className="text-[14px] font-semibold mb-2">Documents to carry</Text>
+        {docs.length ? (
+          <View className="rounded-card border border-ink-200 mb-4">
+            {docs.map((d, i) => (
+              <Pressable key={d} onPress={() => setChecks((c) => ({ ...c, [d]: !c[d] }))} className={`flex-row items-center gap-3 p-3 ${i ? 'border-t border-ink-100' : ''}`}>
+                <View className={`w-5 h-5 rounded-md border-2 items-center justify-center ${checks[d] ? 'bg-brand-600 border-brand-600' : 'border-ink-300'}`}>
+                  {checks[d] && <Icon name="check" size={12} color="white" strokeWidth={3} />}
+                </View>
+                <Text className={`text-[13px] ${checks[d] ? 'text-ink-400 line-through' : 'text-ink-800'}`}>{d}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <View className="rounded-card border border-amber-200 bg-amber-50 p-4 mb-4">
+            <Text className="text-[13px] font-semibold text-amber-900">Registration checklist pending</Text>
+            <Text className="text-[12px] text-amber-800 mt-1">Builtglory will publish the required carry-list when registration is scheduled.</Text>
+          </View>
+        )}
+        <Btn variant="outline" className="w-full" icon="calendar-plus" onPress={() => fire(appointment ? 'Use your device calendar to add this appointment.' : 'Appointment is not scheduled yet.')}>Calendar reminder</Btn>
+      </View>
+      <Toast message={msg} />
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
+        <Pressable onPress={() => go('dealComplete', { ...ctx, sellRequest: request })} disabled={!allChecked} className={`w-full h-12 rounded-xl items-center justify-center ${allChecked ? 'bg-brand-600' : 'bg-ink-100'}`}>
+          <Text className={`font-semibold text-[15px] ${allChecked ? 'text-white' : 'text-ink-400'}`}>Confirm Appointment</Text>
+        </Pressable>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-17 Deal Complete ─────────────────────────────────────
+export function DealCompleteScreen() {
+  const { go, ctx } = useNav();
+  const { request } = useSellRequestContext(ctx);
+  return (
+    <Screen fill>
+      <View className="flex-1 items-center justify-center px-6">
+        <SuccessBurst icon="party-popper" />
+        <Text className="text-[22px] font-bold text-center">Your property has been sold</Text>
+        <Text className="text-ink-500 mt-2 text-[13px] max-w-[250px] leading-relaxed text-center">Congratulations! The deal for {sellRequestTitle(request || ctx?.sellRequest)} is complete.</Text>
+        <View className="mt-6 rounded-card border border-ink-200 w-full">
+          <FadeInView className="flex-row items-center justify-between px-4 py-3"><Text className="text-[13px] font-medium">Payment</Text><Text className="text-[12px] font-semibold text-emerald-700">✓ Received</Text></FadeInView>
+          <FadeInView delay={80} className="flex-row items-center justify-between px-4 py-3 border-t border-ink-100"><Text className="text-[13px] font-medium">Registration</Text><Text className="text-[12px] font-semibold text-emerald-700">✓ Completed</Text></FadeInView>
+        </View>
+        <Btn className="w-full mt-5" icon="file-text" onPress={() => go('pdfViewer', { doc: { name: 'Sale Deed' }, from: 'dealComplete' })}>Download Sale Deed</Btn>
+        <Pressable onPress={() => go('help')} className="mt-4"><Text className="text-[13px] text-brand-600 font-semibold">Contact Builtglory</Text></Pressable>
+      </View>
+    </Screen>
+  );
+}
+
+// ─── SL-18 Rejected Listing ───────────────────────────────────
+export function RejectedListingScreen() {
+  const { go, back, ctx } = useNav();
+  const { request, error, load } = useSellRequestContext(ctx);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  return (
+    <Screen>
+      <TopBar onBack={back} title="Listing Rejected" />
+      {!!error && <ErrorCard message={error} onRetry={load} />}
+      <View className="px-4">
+        <View className="rounded-card border border-rose-200 bg-rose-50/50 p-4 flex-row gap-3 mb-4">
+          <Icon name="circle-x" size={20} color="#E11D48" />
+          <View>
+            <Text className="text-[14px] font-semibold text-rose-800">Listing could not be approved</Text>
+            <Text className="text-[12.5px] text-rose-700 mt-0.5">Reason: {request?.rejectionReason || request?.changeRequests?.[0] || 'Builtglory review team requested changes.'}</Text>
+          </View>
+        </View>
+        <View className="flex-row items-center gap-2 p-3 rounded-card bg-ink-50 mb-5">
+          <Icon name="shield-check" size={14} color="#10B981" /><Text className="text-[12px] text-ink-600 flex-1">All your uploaded documents remain safe in your account.</Text>
+        </View>
+        <View className="gap-2">
+          <Btn variant="outline" className="w-full" icon="headphones" onPress={() => go('help')}>Contact Builtglory Team</Btn>
+          <Pressable onPress={() => setConfirmDelete(true)} className="w-full h-12 rounded-xl items-center justify-center"><Text className="text-rose-600 font-medium text-[14px]">Delete Listing</Text></Pressable>
+        </View>
+      </View>
+      {confirmDelete && (
+        <Sheet onClose={() => setConfirmDelete(false)} title="Delete this listing?">
+          <Text className="text-[13px] text-ink-500 mb-5">This permanently removes the listing. Your uploaded documents stay in your account.</Text>
+          <View className="gap-2">
+            <Pressable onPress={() => go('sellerDashboard')} className="w-full h-12 rounded-xl items-center justify-center bg-rose-600"><Text className="text-white font-semibold text-[15px]">Delete Listing</Text></Pressable>
+            <Pressable onPress={() => setConfirmDelete(false)} className="w-full h-12 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Keep Listing</Text></Pressable>
+          </View>
+        </Sheet>
+      )}
+    </Screen>
+  );
+}
