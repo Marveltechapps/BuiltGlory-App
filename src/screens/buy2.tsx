@@ -4,8 +4,11 @@ import * as Clipboard from 'expo-clipboard';
 import Icon from '../components/Icon';
 import { Screen, TopBar, Field, DocCard, Btn, PhotoPlaceholder, Toast, useToast, Sheet, Spinner, SuccessBurst, ShakeView } from '../components/shared';
 import { formatINR } from '../data/data';
-import { useNav } from '../navigation/useNav';
+import { useFlowCompletionBack, useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
+import { usePolling } from '../hooks/usePolling';
+import { BUY_ENQUIRIES_CACHE_PREFIX } from '../state/primaryTabCache';
+import { enquiryId, formatPaymentStatus } from '../utils/buyEnquiryStatus';
 import {
   BuyEnquiry,
   cancelBuyEnquiry,
@@ -126,32 +129,46 @@ function LoadingBlock({ label }: { label: string }) {
   );
 }
 
-function useEnquiryContext(ctx: any) {
-  const { authToken } = useAppState();
+function useEnquiryContext(ctx: any, options: { pollMs?: number } = {}) {
+  const { authToken, getCachedValue, setCachedValue } = useAppState();
   const initial = ctx?.enquiry as BuyEnquiry | undefined;
   const [enquiry, setEnquiry] = useState<BuyEnquiry | null>(initial ?? null);
   const [loading, setLoading] = useState(!!ctx?.enquiryId);
   const [error, setError] = useState<string | null>(null);
-  const enquiryId = ctx?.enquiryId || idOf(initial);
-  const load = useCallback(async () => {
-    if (!authToken || !enquiryId) {
-      setLoading(false);
+  const activeEnquiryId = ctx?.enquiryId || idOf(initial);
+  const pollMs = options.pollMs ?? 10000;
+  const syncCache = useCallback((latest: BuyEnquiry) => {
+    if (!authToken) return;
+    const cacheKey = `${BUY_ENQUIRIES_CACHE_PREFIX}:${authToken}`;
+    const cached = getCachedValue<BuyEnquiry[]>(cacheKey);
+    if (!cached) return;
+    const next = cached.map((item) => enquiryId(item) === enquiryId(latest) ? latest : item);
+    setCachedValue(cacheKey, next);
+  }, [authToken, getCachedValue, setCachedValue]);
+  const load = useCallback(async (silent = false) => {
+    if (!authToken || !activeEnquiryId) {
+      if (!silent) setLoading(false);
       return;
     }
-    setLoading(true);
-    setError(null);
-    try {
-      setEnquiry(await getBuyEnquiry(authToken, enquiryId));
-    } catch {
-      setError('Could not load enquiry context.');
-    } finally {
-      setLoading(false);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
     }
-  }, [authToken, enquiryId]);
+    try {
+      const latest = await getBuyEnquiry(authToken, activeEnquiryId);
+      setEnquiry(latest);
+      syncCache(latest);
+    } catch {
+      if (!silent) setError('Could not load enquiry context.');
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [authToken, activeEnquiryId, syncCache]);
   useEffect(() => {
-    load();
-  }, [load]);
-  return { enquiry, enquiryId, loading, error, reload: load };
+    load(Boolean(ctx?.refresh));
+  }, [load, ctx?.refresh]);
+  usePolling(() => load(true), pollMs, Boolean(authToken && activeEnquiryId));
+  return { enquiry, enquiryId: activeEnquiryId, loading, error, reload: () => load(false) };
 }
 
 function usePropertyContext(ctx: any) {
@@ -160,24 +177,26 @@ function usePropertyContext(ctx: any) {
   const [loading, setLoading] = useState(!!ctx?.propertyId);
   const [error, setError] = useState<string | null>(null);
   const propertyId = ctx?.propertyId || idOf(initial);
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!propertyId) {
-      setLoading(false);
+      if (!silent) setLoading(false);
       return;
     }
-    setLoading(true);
-    setError(null);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       setProperty(await getCustomerProperty(propertyId));
     } catch {
-      setError('Could not load property context.');
+      if (!silent) setError('Could not load property context.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [propertyId]);
   useEffect(() => {
-    load();
-  }, [load]);
+    load(Boolean(ctx?.refresh));
+  }, [load, ctx?.refresh]);
   return { property, propertyId, loading, error, reload: load };
 }
 
@@ -218,7 +237,7 @@ export function DocumentsSharedScreen() {
       <View className="px-4">
         <View className="flex-row items-center gap-2.5 p-3 rounded-card bg-brand-50 mb-4">
           <View className="w-8 h-8 rounded-full bg-brand-600 items-center justify-center"><Icon name="bell" size={15} color="white" /></View>
-          <Text className="text-[12px] text-brand-800 leading-snug flex-1">Builtglory has shared your property documents. Tap any document to view.</Text>
+          <Text className="text-[12px] text-brand-800 leading-display-tight flex-1">Builtglory has shared your property documents. Tap any document to view.</Text>
         </View>
         <View className="gap-2.5">
           {!loading && docs.length === 0 && (
@@ -250,7 +269,7 @@ export function DocumentsSharedScreen() {
 
 // ─── B-15 Payment ────────────────────────────────────────────
 export function PaymentScreen() {
-  const { go, back, ctx } = useNav();
+  const { go, completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const enquiry = ctx?.enquiry as BuyEnquiry | undefined;
   const [payments, setPayments] = useState<CustomerPayment[]>([]);
@@ -283,14 +302,16 @@ export function PaymentScreen() {
       setError('Token payment configuration is unavailable. Please retry or contact support.');
     }
   }, []);
-  const loadPayments = useCallback(async () => {
+  const loadPayments = useCallback(async (silent = false) => {
     if (!authToken) return;
     try {
       setPayments(await listCustomerPayments(authToken, { type: 'token', limit: 5, sort: 'newest' }));
+      if (!silent) setError(null);
     } catch {
-      setError('Could not load payment history.');
+      if (!silent) setError('Could not load payment history.');
     }
   }, [authToken]);
+  usePolling(() => loadPayments(true), 10000, Boolean(authToken));
   const pay = async () => {
     if (!authToken) {
       setError('Please sign in again before creating a token payment.');
@@ -316,7 +337,7 @@ export function PaymentScreen() {
         idempotencyKey: `${dealId}-token-${Date.now()}`,
       });
       setStatus('idle');
-      go(payment.status === 'failed' ? 'paymentFailure' : 'registrationDetails', { enquiry, payment });
+      completeTo(payment.status === 'failed' ? 'paymentFailure' : 'registrationDetails', { enquiry, payment });
     } catch {
       setStatus('idle');
       setError('Could not create the token payment order.');
@@ -339,13 +360,13 @@ export function PaymentScreen() {
       <View className="px-4">
         <View className="rounded-card bg-brand-600 p-5 items-center mb-5">
           <Text className="text-[12px] text-white/70 uppercase tracking-wider">Token Amount</Text>
-          <Text className="text-[36px] font-bold text-white leading-tight mt-1">{configReady ? formatINR(tokenAmount) : 'Unavailable'}</Text>
+          <Text className="text-[36px] font-bold text-white leading-display mt-1">{configReady ? formatINR(tokenAmount) : 'Unavailable'}</Text>
           <Text className="text-[12px] text-white/80">Refundable · Held in Builtglory escrow</Text>
         </View>
         {!!payments.length && (
           <View className="rounded-card bg-ink-50 p-3 mb-4">
             <Text className="text-[12px] text-ink-500">Latest token payment</Text>
-            <Text className="text-[13px] font-semibold text-ink-900">{payments[0].referenceId ?? 'Payment'} · {payments[0].status ?? 'created'}</Text>
+            <Text className="text-[13px] font-semibold text-ink-900">{payments[0].referenceId ?? 'Payment'} · {formatPaymentStatus(payments[0].status)}</Text>
           </View>
         )}
         <View className="flex-row gap-2 mb-4">
@@ -399,7 +420,7 @@ export function PaymentScreen() {
         )}
       </View>
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={pay} disabled={status === 'processing' || !configReady} className={`w-full h-12 rounded-xl items-center justify-center ${status === 'processing' || !configReady ? 'bg-ink-100' : 'bg-brand-600'}`}>
+        <Pressable onPress={pay} disabled={status === 'processing' || !configReady} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${status === 'processing' || !configReady ? 'bg-ink-100' : 'bg-brand-600'}`}>
           <Text className={`font-semibold text-[15px] ${status === 'processing' || !configReady ? 'text-ink-400' : 'text-white'}`}>
             {status === 'processing' ? 'Creating payment...' : method === 'cheque' ? 'I have handed over the cheque' : `I have paid ${formatINR(tokenAmount)}`}
           </Text>
@@ -435,9 +456,28 @@ export function PaymentFailureScreen() {
 
 // ─── B-16 Registration Details ───────────────────────────────
 export function RegistrationDetailsScreen() {
-  const { go, back, ctx } = useNav();
-  const payment = ctx?.payment as CustomerPayment | undefined;
+  const { resetTo, ctx } = useNav();
+  useFlowCompletionBack();
+  const [payment, setPayment] = useState<CustomerPayment | undefined>(ctx?.payment as CustomerPayment | undefined);
   const { enquiry, loading, error, reload } = useEnquiryContext(ctx);
+  const { authToken } = useAppState();
+  const dealId = String((enquiry as any)?.deal?._id ?? (enquiry as any)?.deal?.id ?? (enquiry as any)?.dealId ?? (payment as any)?.dealId ?? '');
+  const refreshPayment = useCallback(async () => {
+    if (!authToken) return;
+    try {
+      const payments = await listCustomerPayments(authToken, { type: 'token', limit: 20, sort: 'newest' });
+      const latest = dealId
+        ? payments.find((item) => String(item.dealId ?? '') === dealId) ?? payments[0]
+        : payments[0];
+      if (latest) setPayment(latest);
+    } catch {
+      // Keep the last known payment state while enquiry polling continues.
+    }
+  }, [authToken, dealId]);
+  useEffect(() => {
+    refreshPayment();
+  }, [refreshPayment]);
+  usePolling(refreshPayment, 10000, Boolean(authToken));
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const registration = (enquiry as any)?.registration ?? (enquiry as any)?.deal?.registration ?? {};
   const appointment = registration.appointment ?? null;
@@ -453,14 +493,14 @@ export function RegistrationDetailsScreen() {
   const appointmentAddress = appointment?.address || 'Address will appear once registration is scheduled.';
   return (
     <Screen padBottom>
-      <TopBar onBack={back} title="Registration Details" />
+      <TopBar onBack={() => resetTo('home')} title="Registration Details" />
       {loading && <LoadingBlock label="Loading registration context..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
       <View className="px-4">
         {!!payment && (
           <View className="rounded-card bg-emerald-50 border border-emerald-200 p-3 mb-4">
             <Text className="text-[12px] text-emerald-700">Token payment</Text>
-            <Text className="text-[13px] font-semibold text-emerald-900">{payment.referenceId ?? 'Payment'} · {payment.status ?? 'created'}</Text>
+            <Text className="text-[13px] font-semibold text-emerald-900">{payment.referenceId ?? 'Payment'} · {formatPaymentStatus(payment.status)}</Text>
           </View>
         )}
         <View className="rounded-card border border-ink-200 overflow-hidden mb-4">
@@ -500,7 +540,7 @@ export function RegistrationDetailsScreen() {
       </View>
       <Toast message={msg} />
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={() => go('home')} disabled={!allChecked} className={`w-full h-12 rounded-xl items-center justify-center ${allChecked ? 'bg-emerald-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={() => resetTo('home')} disabled={!allChecked} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${allChecked ? 'bg-emerald-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${allChecked ? 'text-white' : 'text-ink-400'}`}>Deal Complete</Text>
         </Pressable>
       </View>
@@ -510,7 +550,7 @@ export function RegistrationDetailsScreen() {
 
 // ─── B-17 Cancel Enquiry ──────────────────────────────────────
 export function CancelEnquiryScreen() {
-  const { go, back, ctx } = useNav();
+  const { resetTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const { enquiry, enquiryId, loading, error, reload } = useEnquiryContext(ctx);
   const [reason, setReason] = useState('');
@@ -523,7 +563,7 @@ export function CancelEnquiryScreen() {
     setSubmitError(null);
     try {
       await cancelBuyEnquiry(authToken, enquiryId, reason);
-      go('home');
+      resetTo('home');
     } catch {
       setSubmitError('Could not cancel this enquiry.');
     } finally {
@@ -551,10 +591,10 @@ export function CancelEnquiryScreen() {
           </View>
         </Field>
         <View className="gap-2 mt-5">
-          <Pressable onPress={submitCancel} disabled={!reason || submitting} className={`w-full h-12 rounded-xl items-center justify-center ${reason && !submitting ? 'bg-rose-600' : 'bg-rose-200'}`}>
+          <Pressable onPress={submitCancel} disabled={!reason || submitting} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${reason && !submitting ? 'bg-rose-600' : 'bg-rose-200'}`}>
             <Text className="text-white font-semibold text-[15px]">{submitting ? 'Cancelling...' : 'Cancel Enquiry'}</Text>
           </Pressable>
-          <Pressable onPress={back} className="w-full h-12 rounded-xl items-center justify-center bg-ink-100">
+          <Pressable onPress={back} className="w-full min-h-12 py-3 rounded-xl items-center justify-center bg-ink-100">
             <Text className="text-ink-700 font-semibold text-[15px]">Keep Enquiry</Text>
           </Pressable>
         </View>

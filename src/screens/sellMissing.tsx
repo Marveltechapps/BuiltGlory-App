@@ -1,15 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, View, Text, Pressable } from 'react-native';
+import { ActivityIndicator, Image, ScrollView, View, Text, Pressable } from 'react-native';
 import Icon from '../components/Icon';
 import { Screen, TopBar, Field, Input, Toggle, Btn, Badge, PhotoPlaceholder, SuccessBurst, FadeInView } from '../components/shared';
 import { formatINR } from '../data/data';
-import { useNav } from '../navigation/useNav';
+import { useFlowCompletionBack, useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
+import { CustomerApiError } from '../api/customer';
 import { getSellRequest, getSellValuationEstimate, submitSellRequest, updateSellRequest, SellRequest, SellValuationEstimate } from '../api/customer';
-import { ctxSellRequestId, sellRequestIdOf, sellRequestLocation, sellRequestTitle } from './sell';
+import { ctxSellRequestId, sellRequestIdOf, sellRequestLocation, sellRequestPhotoUrls, sellRequestTitle } from './sell';
 import { SellHeader } from './sell';
 
 function apiMessage(error: unknown, fallback = 'Something went wrong. Please try again.') {
+  if (error instanceof CustomerApiError && Array.isArray(error.details)) {
+    const fields = error.details
+      .map((detail) => (typeof detail === 'object' && detail && 'field' in detail ? String((detail as { field?: string }).field || '') : ''))
+      .filter(Boolean);
+    if (fields.length) return `${error.message} Missing: ${fields.join(', ')}.`;
+  }
   return error instanceof Error ? error.message : fallback;
 }
 
@@ -77,7 +84,7 @@ export function SellPropertyDetailsScreen() {
           furnishing: data.furnish,
           parking: data.parking,
         },
-        draftStep: 4,
+        draftStep: 3,
       });
       go('sellPhotos', { ...ctx, details: data, sellRequest, sellRequestId: sellRequestIdOf(sellRequest) });
     } catch (e) {
@@ -125,7 +132,7 @@ export function SellPropertyDetailsScreen() {
         </Field>
       </View>
       <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={!isValid || saving} className={`w-full h-12 rounded-xl items-center justify-center ${isValid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={saveAndContinue} disabled={!isValid || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${isValid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${isValid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Continue to Photos'}</Text>
         </Pressable>
       </View>
@@ -218,7 +225,7 @@ export function SellPriceEntryScreen() {
         </View>
       </View>
       <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={!valid || saving} className={`w-full h-12 rounded-xl items-center justify-center ${valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={saveAndContinue} disabled={!valid || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${valid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Review Listing'}</Text>
         </Pressable>
       </View>
@@ -228,12 +235,14 @@ export function SellPriceEntryScreen() {
 
 // ─── SL Review Listing (pre-submit summary) ──────────────────
 export function SellReviewScreen() {
-  const { go, back, ctx } = useNav();
+  const { go, completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const [request, setRequest] = useState<SellRequest | null>(ctx?.sellRequest ?? null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const sellRequestId = ctxSellRequestId(ctx);
+  const photoUrls = sellRequestPhotoUrls(request, ctx);
+  const photoCount = photoUrls.length || request?.photosCount || request?.photos?.length || 0;
   useEffect(() => {
     if (!authToken || !sellRequestId) return;
     getSellRequest(authToken, sellRequestId).then(setRequest).catch((e) => setError(apiMessage(e, 'Unable to refresh listing draft.')));
@@ -244,18 +253,28 @@ export function SellReviewScreen() {
     setError('');
     try {
       const submitted = await submitSellRequest(authToken, sellRequestId);
-      go('sellSuccess', { sellRequest: submitted, sellRequestId: sellRequestIdOf(submitted) });
+      completeTo('sellSuccess', { sellRequest: submitted, sellRequestId: sellRequestIdOf(submitted) });
     } catch (e) {
       setError(apiMessage(e, 'Unable to submit listing. Check all required details and try again.'));
     } finally {
       setSubmitting(false);
     }
   };
+  const handleSaveDraft = async () => {
+    if (!authToken || !sellRequestId) return;
+    setError('');
+    try {
+      const saved = await updateSellRequest(authToken, sellRequestId, { draftStep: 7 });
+      completeTo('draftSuccess', { sellRequest: saved, sellRequestId });
+    } catch (e) {
+      setError(apiMessage(e, 'Unable to save draft.'));
+    }
+  };
   const summary = [
     ['Basic Details', `${request?.specifications?.bhk ?? ctx?.basic?.bhk ?? 'BHK'} · ${request?.specifications?.builtUpArea ?? request?.specifications?.plotArea ?? 'Area'} sqft`, 'sellIntent'],
     ['Location', sellRequestLocation(request), 'sellAddress'],
     ['Pricing', request?.askingPrice ? `${formatINR(request.askingPrice)} · ${request.negotiable ? 'Negotiable' : 'Fixed'}` : 'Price pending', 'sellPrice'],
-    ['Photos', `${request?.photosCount ?? request?.photos?.length ?? 0} photos uploaded`, 'sellPhotos'],
+    ['Photos', `${photoCount} photos uploaded`, 'sellPhotos'],
     ['Amenities', `${request?.amenities?.length ?? 0} selected`, 'sellAmenities'],
   ];
   return (
@@ -263,9 +282,16 @@ export function SellReviewScreen() {
       <SellHeader step={7} back={back} title="Review Listing" />
       {!!error && <ErrorCard message={error} />}
       <View className="px-4 mt-4 gap-3">
-        <PhotoPlaceholder tag="review" height={140} className="rounded-card">
+        <PhotoPlaceholder tag="review" height={140} imageUri={photoUrls[0]} className="rounded-card">
           <View className="absolute top-3 left-3"><Badge color="amber">{request?.status ?? 'DRAFT'}</Badge></View>
         </PhotoPlaceholder>
+        {photoUrls.length > 1 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+            {photoUrls.slice(1).map((url, index) => (
+              <Image key={`photo-${index + 1}`} source={{ uri: url }} style={{ width: 72, height: 72, borderRadius: 12 }} resizeMode="cover" />
+            ))}
+          </ScrollView>
+        )}
         <View className="rounded-card bg-brand-50 border border-brand-100 p-3">
           <Text className="text-[13px] font-bold text-ink-900">{sellRequestTitle(request)}</Text>
           <Text className="text-[11.5px] text-ink-600 mt-0.5">Reference: {request?.referenceId ?? 'Will be generated after save'}</Text>
@@ -281,10 +307,10 @@ export function SellReviewScreen() {
             </Pressable>
           ))}
         </View>
-        <Pressable onPress={handleSubmit} disabled={submitting} className={`w-full h-[52px] rounded-card items-center justify-center flex-row gap-2 ${submitting ? 'bg-brand-400' : 'bg-brand-600'}`}>
+        <Pressable onPress={handleSubmit} disabled={submitting} className={`w-full min-h-[52px] py-3.5 rounded-card items-center justify-center flex-row gap-2 ${submitting ? 'bg-brand-400' : 'bg-brand-600'}`}>
           <Text className="text-white font-semibold text-[15px]">{submitting ? 'Submitting…' : 'Submit Listing'}</Text>
         </Pressable>
-        <Pressable onPress={() => go('draftSuccess', { sellRequest: request, sellRequestId })} className="w-full h-[52px] rounded-card items-center justify-center border border-ink-200 flex-row gap-1.5">
+        <Pressable onPress={handleSaveDraft} className="w-full min-h-[52px] py-3.5 rounded-card items-center justify-center border border-ink-200 flex-row gap-1.5">
           <Text className="text-ink-700 font-semibold text-[15px]">Save as Draft</Text>
         </Pressable>
       </View>
@@ -294,7 +320,8 @@ export function SellReviewScreen() {
 
 // ─── SL-08 Submission Confirmation ────────────────────────────
 export function SellSuccessScreen() {
-  const { go, ctx } = useNav();
+  const { go, resetTo, ctx } = useNav();
+  useFlowCompletionBack();
   const { authToken } = useAppState();
   const [request, setRequest] = useState<SellRequest | null>(ctx?.sellRequest ?? null);
   const [error, setError] = useState('');
@@ -328,7 +355,7 @@ export function SellSuccessScreen() {
           ))}
         </View>
         <View className="mt-6 flex-row gap-2 w-full">
-          <Btn variant="outline" className="flex-1" onPress={() => go('home')}>Home</Btn>
+          <Btn variant="outline" className="flex-1" onPress={() => resetTo('home')}>Home</Btn>
           <Btn className="flex-1" onPress={() => go('myListings')}>My Listings</Btn>
         </View>
       </View>

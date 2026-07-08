@@ -4,15 +4,24 @@ import * as Clipboard from 'expo-clipboard';
 import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
+import { PropertyEmbedViewer } from '../components/PropertyEmbedViewer';
+import { PropertyImageViewer } from '../components/PropertyImageViewer';
+import {
+  aerialDroneUrl,
+  hasAerialContent,
+  hasVirtualTour,
+  isImageMediaUrl,
+  virtualTourUrl,
+} from '../utils/propertyMedia';
 import {
   Screen, TopBar, Field, Input, Chip, Badge, PropertyCard, PhotoPlaceholder,
   Toast, useToast, Btn, Spinner, SuccessBurst, FadeInView, EmptyState, SkeletonCard,
 } from '../components/shared';
 import { PROPERTY_TYPES, SPECS, formatINR, Property } from '../data/data';
 import { useAppState } from '../state/AppState';
-import { useNav } from '../navigation/useNav';
+import { useFlowCompletionBack, useNav } from '../navigation/useNav';
 import { contentMetaArray, useContentItem } from '../content';
-import { BUY_TYPE_COUNTS_CACHE_KEY, FAVORITES_LIST_CACHE_PREFIX, TYPE_TO_BACKEND, buildBuyTypeCounts, toBackendType } from '../state/primaryTabCache';
+import { BUY_TYPE_COUNTS_CACHE_KEY, FAVORITES_LIST_CACHE_PREFIX, TYPE_TO_BACKEND, buildBuyTypeCounts, propertyMediaImages, toBackendType } from '../state/primaryTabCache';
 import {
   BuyEnquiry,
   createBuyEnquiry,
@@ -184,7 +193,6 @@ function toDisplayProperty(property: CustomerProperty): DisplayProperty {
   const locality = property.address?.locality ?? property.locality ?? property.address?.line1 ?? city;
   const area = toNumber(property.specs?.builtUpArea ?? property.specs?.carpetArea ?? property.specs?.plotArea);
   const rawBhk = property.specs?.bhk;
-  const photos = property.media?.photos ?? [];
   return {
     id,
     title: property.title ?? 'Untitled property',
@@ -196,7 +204,7 @@ function toDisplayProperty(property: CustomerProperty): DisplayProperty {
     flatNo: property.address?.line2 ?? '—',
     location: locality ?? 'Location unavailable',
     city,
-    images: property.media?.coverPhoto ? [property.media.coverPhoto, ...photos] : photos,
+    images: propertyMediaImages(property.media),
     amenities: property.amenities ?? [],
     verified: property.status === 'available',
     negotiable: !!property.isNegotiable,
@@ -248,13 +256,14 @@ function EmptyBlock({ title, action, onPress }: { title: string; action?: string
 
 function usePropertyDetailFromContext(ctx: any) {
   const initial = (ctx?.p as DisplayProperty | undefined) || EMPTY_PROPERTY;
-  const [property, setProperty] = useState<DisplayProperty>(initial);
-  const [loading, setLoading] = useState(!!ctx?.propertyId);
-  const [error, setError] = useState<string | null>(null);
   const propertyId = ctx?.propertyId || propertyIdOf(initial);
+  const [property, setProperty] = useState<DisplayProperty>(initial);
+  const [loading, setLoading] = useState(!!propertyId);
+  const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     if (!propertyId) {
       setLoading(false);
+      setError('Property details are unavailable. Go back and open the listing again.');
       return;
     }
     setLoading(true);
@@ -266,6 +275,11 @@ function usePropertyDetailFromContext(ctx: any) {
     } finally {
       setLoading(false);
     }
+  }, [propertyId]);
+  useEffect(() => {
+    setProperty((ctx?.p as DisplayProperty | undefined) || EMPTY_PROPERTY);
+    setLoading(!!propertyId);
+    setError(null);
   }, [propertyId]);
   useEffect(() => {
     load();
@@ -314,8 +328,8 @@ export function PropertyTypeGrid({
             <View className="w-11 h-11 rounded-xl bg-brand-50 items-center justify-center">
               <Icon name={t.icon} size={20} color={accentColor} />
             </View>
-            <Text className="text-[10.5px] font-semibold text-center leading-tight">{t.label}</Text>
-            <Text className="text-[9px] text-ink-500 leading-none">{counts[t.id] ? `${counts[t.id]} live` : t.sub || 'Browse'}</Text>
+            <Text className="text-[10.5px] font-semibold text-center leading-caption">{t.label}</Text>
+            <Text className="text-[9px] text-ink-500 leading-caption">{counts[t.id] ? `${counts[t.id]} live` : t.sub || 'Browse'}</Text>
           </Pressable>
         ))}
       </View>
@@ -547,6 +561,7 @@ export function PropertyDetailScreen() {
   const [loading, setLoading] = useState(!!(ctx?.propertyId || initial.id));
   const [error, setError] = useState<string | null>(null);
   const [img, setImg] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const propertyId = ctx?.propertyId || propertyIdOf(p);
   const imageCount = p.images.length;
   const hasMultipleImages = imageCount > 1;
@@ -559,13 +574,13 @@ export function PropertyDetailScreen() {
       dest: 'vrTour',
       icon: 'glasses',
       label: 'VR Tour',
-      visible: hasText(backend?.media?.tour3dUrl) || hasText(backend?.media?.videoUrl),
+      visible: hasVirtualTour(backend?.media),
     },
     {
       dest: 'aerial',
       icon: 'plane',
       label: 'Aerial',
-      visible: hasText(backend?.media?.droneImageUrl) || hasText(backend?.media?.videoUrl),
+      visible: hasAerialContent(backend?.media, propertyCoordinates(p)),
     },
     {
       dest: 'specs',
@@ -611,6 +626,10 @@ export function PropertyDetailScreen() {
     if (!hasMultipleImages) return;
     setImg((current) => (current + 1) % imageCount);
   }, [hasMultipleImages, imageCount]);
+  const openImageViewer = useCallback(() => {
+    if (!currentImage) return;
+    setViewerOpen(true);
+  }, [currentImage]);
   const loadDetail = useCallback(async () => {
     if (!propertyId) {
       setLoading(false);
@@ -654,7 +673,16 @@ export function PropertyDetailScreen() {
         {error && <View className="mt-2"><ErrorCard message={error} onRetry={loadDetail} /></View>}
         <View className="relative">
           <PhotoPlaceholder tag={p.id + activeImageIndex} height={280}>
-            {currentImage && <Image source={{ uri: currentImage }} className="absolute inset-0 w-full h-full" resizeMode="cover" />}
+            {currentImage && (
+              <Pressable
+                onPress={openImageViewer}
+                accessibilityRole="imagebutton"
+                accessibilityLabel={`Open property image ${activeImageIndex + 1} of ${imageCount}`}
+                className="absolute inset-0"
+              >
+                <Image source={{ uri: currentImage }} className="absolute inset-0 w-full h-full" resizeMode="cover" />
+              </Pressable>
+            )}
             {p.verified && (
               <View className="absolute top-16 left-4 bg-emerald-500 px-3 py-1 rounded-full flex-row items-center gap-1">
                 <Icon name="badge-check" size={12} color="white" /><Text className="text-white text-[11px] font-medium">Verified</Text>
@@ -679,9 +707,9 @@ export function PropertyDetailScreen() {
                   <Icon name="chevron-right" size={24} color="#0F172A" strokeWidth={2.5} />
                 </Pressable>
                 <View className="absolute bottom-3 left-0 right-0 flex-row items-center justify-center gap-1.5">
-                  {p.images.map((image, index) => (
+                  {p.images.map((_, index) => (
                     <Pressable
-                      key={`${image}-${index}`}
+                      key={`img-dot-${index}`}
                       accessibilityLabel={`Show property image ${index + 1}`}
                       onPress={() => setImg(index)}
                       className={`h-1.5 rounded-full ${index === activeImageIndex ? 'w-5 bg-white' : 'w-1.5 bg-white/60'}`}
@@ -702,7 +730,7 @@ export function PropertyDetailScreen() {
               <View className="bg-brand-50 px-2 py-0.5 rounded-md"><Text className="text-brand-600 text-[11px] font-semibold">Negotiable</Text></View>
             )}
           </View>
-          <Text className="text-[18px] font-semibold text-ink-900 mb-2 leading-snug">{p.title}</Text>
+          <Text className="text-[18px] font-semibold text-ink-900 mb-2 leading-display-tight">{p.title}</Text>
           <View className="flex-row items-center justify-between mb-4">
             <View className="flex-row items-center gap-1">
               <Icon name="map-pin" size={14} color="#475569" />
@@ -762,6 +790,13 @@ export function PropertyDetailScreen() {
         <Btn variant="outline" className="flex-1" icon="git-compare" onPress={() => go('compare', { p, propertyId: propertyIdOf(p) })}>Compare</Btn>
         <Btn className="flex-1" onPress={() => go('enquiry', { p, propertyId: propertyIdOf(p) })}>Submit Enquiry</Btn>
       </View>
+      <PropertyImageViewer
+        images={p.images}
+        visible={viewerOpen}
+        imageIndex={activeImageIndex}
+        onClose={() => setViewerOpen(false)}
+        onImageIndexChange={setImg}
+      />
     </Screen>
   );
 }
@@ -790,7 +825,7 @@ export function SpecsScreen() {
             return (
               <View key={s.label} style={{ width: '22%' }} className={`aspect-square rounded-card border p-2 items-center justify-center gap-1.5 ${has ? 'border-brand-200 bg-brand-50' : 'border-ink-200 opacity-40'}`}>
                 <Icon name={s.icon} size={20} color={has ? '#1A6FFF' : '#94A3B8'} />
-                <Text className="text-[9.5px] text-center font-medium leading-tight">{s.label}</Text>
+                <Text className="text-[9.5px] text-center font-medium leading-caption">{s.label}</Text>
               </View>
             );
           })}
@@ -877,8 +912,24 @@ export function AdvantagesScreen() {
         </View>
       </View>
       <View className="absolute bottom-0 left-0 right-0 bg-white border-t border-ink-200 px-3 pt-3 flex-row gap-2" style={{ paddingBottom: 12 + insets.bottom, zIndex: 10, elevation: 10 }}>
-        <Btn variant="outline" icon="glasses" className="flex-1" onPress={() => go('vrTour', { p, propertyId })}>VR walk</Btn>
-        <Btn variant="outline" icon="plane" className="flex-1" onPress={() => go('aerial', { p, propertyId })}>Aerial view</Btn>
+        <Btn
+          variant="outline"
+          icon="glasses"
+          className="flex-1"
+          disabled={loading}
+          onPress={() => go('vrTour', { p, propertyId: propertyId || propertyIdOf(p) })}
+        >
+          VR walk
+        </Btn>
+        <Btn
+          variant="outline"
+          icon="plane"
+          className="flex-1"
+          disabled={loading}
+          onPress={() => go('aerial', { p, propertyId: propertyId || propertyIdOf(p) })}
+        >
+          Aerial view
+        </Btn>
       </View>
     </Screen>
   );
@@ -888,43 +939,35 @@ export function AdvantagesScreen() {
 export function VRTourScreen() {
   const { back, ctx } = useNav();
   const { property: p, loading, error, reload } = usePropertyDetailFromContext(ctx);
-  const rooms = ['Living', 'Kitchen', 'Master Bed', 'Bed 2', 'Bathroom', 'Balcony'];
-  const [room, setRoom] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const tourUrl = p.backend?.media?.tour3dUrl ?? p.backend?.media?.videoUrl;
+  const tourUrl = virtualTourUrl(p.backend?.media);
+  const tourReady = !loading && !error && !!tourUrl;
   return (
-    <Screen dark>
+    <Screen dark fill>
       <TopBar onBack={back} title="360° Virtual Tour" dark />
       {loading && <LoadingBlock label="Loading virtual tour..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4">
-        <View className="aspect-[4/5] rounded-card overflow-hidden bg-indigo-900 items-center justify-center relative">
-          <View className="w-20 h-20 rounded-full border-2 border-white/40 items-center justify-center">
-            <View className="w-12 h-12 rounded-full bg-white/20 items-center justify-center">
-              <Icon name="rotate-3d" size={24} color="white" />
-            </View>
-          </View>
-          <View className="absolute top-3 left-3 right-3 flex-row items-center justify-between">
-            <Badge color="brand">{tourUrl ? 'LIVE 360°' : 'TOUR PREVIEW'}</Badge>
-            <Text className="text-white/80 text-[11px]">{rooms[room]}</Text>
-          </View>
-          <View className="absolute bottom-3 left-3 right-3 flex-row items-center justify-between">
-            <View className="w-10 h-10 rounded-full bg-white/15 items-center justify-center"><Icon name="volume-2" size={16} color="white" /></View>
-            <Pressable onPress={() => tourUrl ? openExternalUrl(tourUrl).catch(() => undefined) : setPlaying((p) => !p)} className="px-4 py-2 rounded-full bg-white flex-row items-center gap-1.5">
-              <Icon name={tourUrl ? 'external-link' : playing ? 'pause' : 'play'} size={12} color="#0F172A" />
-              <Text className="text-ink-900 text-[12px] font-semibold">{tourUrl ? 'Open tour' : playing ? 'Pause' : 'Play preview'}</Text>
-            </Pressable>
-            <View className="w-10 h-10 rounded-full bg-white/15 items-center justify-center"><Icon name="info" size={16} color="white" /></View>
-          </View>
+      {!loading && !error && !tourUrl && (
+        <View className="flex-1 items-center justify-center px-6">
+          <Icon name="glasses" size={40} color="#64748B" />
+          <Text className="text-white text-[15px] font-semibold mt-4 text-center">Virtual tour unavailable</Text>
+          <Text className="text-white/60 text-[12px] mt-2 text-center">
+            A 360° walkthrough has not been added for {p.title || 'this property'} yet.
+          </Text>
+          <Btn variant="outline" className="mt-5" onPress={reload}>Refresh</Btn>
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-3" contentContainerStyle={{ gap: 8 }}>
-          {rooms.map((r, i) => (
-            <Pressable key={r} onPress={() => setRoom(i)} className={`px-3 py-1.5 rounded-full ${room === i ? 'bg-brand-600' : 'bg-white/10'}`}>
-              <Text className={`text-[12px] font-medium ${room === i ? 'text-white' : 'text-white/70'}`}>{r}</Text>
+      )}
+      {tourReady && tourUrl && (
+        <View className="flex-1">
+          <View className="px-4 py-2 flex-row items-center justify-between">
+            <Badge color="brand">LIVE 360°</Badge>
+            <Text className="text-white/70 text-[11px] flex-1 ml-3" numberOfLines={1}>{p.title}</Text>
+            <Pressable onPress={() => openExternalUrl(tourUrl).catch(() => undefined)} className="ml-2 px-2 py-1 rounded-full bg-white/10">
+              <Icon name="external-link" size={14} color="white" />
             </Pressable>
-          ))}
-        </ScrollView>
-      </View>
+          </View>
+          <PropertyEmbedViewer url={tourUrl} label="virtual tour" />
+        </View>
+      )}
     </Screen>
   );
 }
@@ -933,33 +976,111 @@ export function VRTourScreen() {
 export function AerialScreen() {
   const { back, ctx } = useNav();
   const { property: p, loading, error, reload } = usePropertyDetailFromContext(ctx);
-  const [playing, setPlaying] = useState(true);
-  const aerialImageUrl = p.backend?.media?.droneImageUrl;
-  const aerialUrl = aerialImageUrl ?? p.backend?.media?.videoUrl;
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [showDroneMedia, setShowDroneMedia] = useState(false);
+  const coordinates = propertyCoordinates(p);
+  const droneUrl = aerialDroneUrl(p.backend?.media);
+  const droneImageUrl = droneUrl && isImageMediaUrl(droneUrl) ? droneUrl : null;
+  const droneEmbedUrl = droneUrl && !isImageMediaUrl(droneUrl) ? droneUrl : null;
+  const mapRegion: Region | undefined = coordinates
+    ? { ...coordinates, latitudeDelta: 0.004, longitudeDelta: 0.004 }
+    : undefined;
+  const aerialReady = !loading && !error && hasAerialContent(p.backend?.media, coordinates);
+  const showSatelliteMap = aerialReady && mapRegion && !showDroneMedia;
+  const showDroneEmbed = aerialReady && showDroneMedia && !!droneEmbedUrl;
+  const showDroneImage = aerialReady && showDroneMedia && !!droneImageUrl;
+  useEffect(() => {
+    if (!coordinates && droneUrl) setShowDroneMedia(true);
+  }, [coordinates, droneUrl]);
   return (
-    <Screen dark>
-      <TopBar onBack={back} title="Aerial Drone View" dark />
-      {loading && <LoadingBlock label="Loading aerial media..." />}
+    <Screen dark fill>
+      <TopBar onBack={back} title="Aerial View" dark />
+      {loading && <LoadingBlock label="Loading aerial view..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4">
-        <View className="aspect-video rounded-card overflow-hidden bg-sky-500 items-center justify-center relative">
-          <View className="absolute top-3 left-3 flex-row gap-2"><Badge color="rose">● REC</Badge><Badge color="brand">{aerialUrl ? '4K · 60fps' : 'Aerial preview'}</Badge></View>
-          {aerialImageUrl && <Image source={{ uri: aerialImageUrl }} className="absolute inset-0 w-full h-full" resizeMode="cover" />}
-          <Pressable onPress={() => aerialUrl ? openExternalUrl(aerialUrl).catch(() => undefined) : setPlaying(!playing)} className="absolute inset-0 items-center justify-center">
-            <View className="w-14 h-14 rounded-full bg-white/30 items-center justify-center">
-              <Icon name={aerialUrl ? 'external-link' : playing ? 'pause' : 'play'} size={22} color="white" />
-            </View>
-          </Pressable>
+      {!loading && !error && !aerialReady && (
+        <View className="flex-1 items-center justify-center px-6">
+          <Icon name="plane" size={40} color="#64748B" />
+          <Text className="text-white text-[15px] font-semibold mt-4 text-center">Aerial view unavailable</Text>
+          <Text className="text-white/60 text-[12px] mt-2 text-center">
+            Add map coordinates or drone media for {p.title || 'this property'} to enable the aerial view.
+          </Text>
+          <Btn variant="outline" className="mt-5" onPress={reload}>Refresh</Btn>
         </View>
-        <View className="mt-4 flex-row flex-wrap gap-2">
-          {[['compass', 'N orient'], ['zoom-in', 'Zoom'], ['layers', 'Layers'], ['download', 'Save']].map(([i, l]) => (
-            <View key={l} style={{ width: '22%' }} className="p-3 rounded-card bg-white/5 items-center">
-              <Icon name={i} size={18} color="white" />
-              <Text className="text-[10.5px] text-white mt-1">{l}</Text>
+      )}
+      {aerialReady && (
+        <View className="flex-1">
+          <View className="px-4 py-2 flex-row items-center gap-2">
+            {mapRegion && (
+              <Pressable
+                onPress={() => setShowDroneMedia(false)}
+                className={`px-3 py-1.5 rounded-full ${!showDroneMedia ? 'bg-brand-600' : 'bg-white/10'}`}
+              >
+                <Text className={`text-[12px] font-semibold ${!showDroneMedia ? 'text-white' : 'text-white/70'}`}>Satellite map</Text>
+              </Pressable>
+            )}
+            {droneUrl && (
+              <Pressable
+                onPress={() => setShowDroneMedia(true)}
+                className={`px-3 py-1.5 rounded-full ${showDroneMedia ? 'bg-brand-600' : 'bg-white/10'}`}
+              >
+                <Text className={`text-[12px] font-semibold ${showDroneMedia ? 'text-white' : 'text-white/70'}`}>Drone media</Text>
+              </Pressable>
+            )}
+            <View className="flex-1" />
+            <Text className="text-white/60 text-[11px]" numberOfLines={1}>{p.title}</Text>
+          </View>
+          {showSatelliteMap && mapRegion && (
+            <View className="flex-1 mx-4 mb-4 rounded-card overflow-hidden border border-white/10">
+              <MapView
+                provider={PROVIDER_GOOGLE}
+                style={{ flex: 1 }}
+                initialRegion={mapRegion}
+                mapType="satellite"
+                showsBuildings
+                showsCompass
+                showsScale
+              >
+                <Marker
+                  coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }}
+                  title={p.title}
+                  description={[p.location, p.city].filter(Boolean).join(', ')}
+                />
+              </MapView>
+              <View className="absolute left-3 right-3 bottom-3 bg-black/60 px-3 py-2 rounded-xl">
+                <Text className="text-white text-[12px] font-semibold" numberOfLines={1}>{p.title}</Text>
+                <Text className="text-white/70 text-[10.5px]" numberOfLines={1}>
+                  {p.location}, {p.city} · {mapRegion.latitude.toFixed(5)}, {mapRegion.longitude.toFixed(5)}
+                </Text>
+              </View>
             </View>
-          ))}
+          )}
+          {showDroneEmbed && droneEmbedUrl && (
+            <View className="flex-1 mx-4 mb-4 rounded-card overflow-hidden border border-white/10">
+              <PropertyEmbedViewer url={droneEmbedUrl} label="drone footage" />
+            </View>
+          )}
+          {showDroneImage && droneImageUrl && (
+            <View className="flex-1 mx-4 mb-4 rounded-card overflow-hidden border border-white/10 bg-ink-800">
+              <Pressable onPress={() => setViewerOpen(true)} className="flex-1" accessibilityRole="imagebutton" accessibilityLabel="Open aerial image fullscreen">
+                <Image source={{ uri: droneImageUrl }} className="w-full h-full" resizeMode="cover" />
+              </Pressable>
+              <View className="absolute top-3 left-3">
+                <Badge color="brand">Drone capture</Badge>
+              </View>
+            </View>
+          )}
+          {!mapRegion && showDroneMedia && !droneUrl && (
+            <View className="flex-1 items-center justify-center px-6">
+              <Text className="text-white/70 text-[12px] text-center">Drone media is not available for this property.</Text>
+            </View>
+          )}
         </View>
-      </View>
+      )}
+      <PropertyImageViewer
+        images={droneImageUrl ? [droneImageUrl] : []}
+        visible={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+      />
     </Screen>
   );
 }
@@ -1043,7 +1164,7 @@ export function ShareScreen() {
 
 // ─── B-10 Enquiry Form ───────────────────────────────────────
 export function EnquiryScreen() {
-  const { back, go, ctx } = useNav();
+  const { back, go, completeTo, ctx } = useNav();
   const { authToken, currentUser } = useAppState();
   const { property: p, propertyId, loading: loadingProperty, error: propertyError, reload } = usePropertyDetailFromContext(ctx);
   const [name, setName] = useState(currentUser?.name ?? currentUser?.fullName ?? '');
@@ -1073,7 +1194,7 @@ export function EnquiryScreen() {
         preferredVisitTimeSlot: visitTime,
         additionalMessage: msgText.trim() || null,
       });
-      go('enquirySuccess', { p, propertyId, enquiry });
+      completeTo('enquirySuccess', { p, propertyId, enquiry });
     } catch {
       setError('Could not submit enquiry. Please check the details and try again.');
     } finally {
@@ -1105,7 +1226,7 @@ export function EnquiryScreen() {
               <Text className="text-[13px] font-medium text-ink-700 mb-2">Preferred Contact</Text>
               <View className="flex-row gap-2">
                 {['Phone', 'WhatsApp', 'Email'].map((m) => (
-                  <Pressable key={m} onPress={() => setContact(m)} className={`flex-1 h-10 rounded-card items-center justify-center ${contact === m ? 'bg-brand-600' : 'bg-ink-100'}`}>
+                  <Pressable key={m} onPress={() => setContact(m)} className={`flex-1 min-h-10 py-2 rounded-card items-center justify-center ${contact === m ? 'bg-brand-600' : 'bg-ink-100'}`}>
                     <Text className={`text-[12px] font-medium ${contact === m ? 'text-white' : 'text-ink-700'}`}>{m}</Text>
                   </Pressable>
                 ))}
@@ -1154,7 +1275,7 @@ export function EnquiryScreen() {
             <Text className="text-[11px] text-ink-600 flex-1">Your information is secure and shared only with the property owner.</Text>
           </View>
         </View>
-        <Pressable onPress={submit} disabled={!valid || loading} className={`w-full h-12 rounded-xl items-center justify-center flex-row gap-2 ${valid && !loading ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={submit} disabled={!valid || loading} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center flex-row gap-2 ${valid && !loading ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${valid && !loading ? 'text-white' : 'text-ink-400'}`}>{loading ? 'Submitting…' : 'Submit Enquiry'}</Text>
         </Pressable>
       </View>
@@ -1164,7 +1285,8 @@ export function EnquiryScreen() {
 
 // ─── B-11 Enquiry Success ────────────────────────────────────
 export function EnquirySuccessScreen() {
-  const { go, ctx } = useNav();
+  const { go, resetTo, ctx } = useNav();
+  useFlowCompletionBack();
   const { authToken } = useAppState();
   const enquiry = ctx?.enquiry as BuyEnquiry | undefined;
   const [latest, setLatest] = useState<BuyEnquiry | null>(enquiry ?? null);
@@ -1191,7 +1313,7 @@ export function EnquirySuccessScreen() {
           ))}
         </View>
         <View className="mt-6 flex-row gap-2 w-full">
-          <Btn variant="outline" size="sm" className="flex-1" onPress={() => go('home')}>Home</Btn>
+          <Btn variant="outline" size="sm" className="flex-1" onPress={() => resetTo('home')}>Home</Btn>
           <Btn size="sm" className="flex-1" onPress={() => go('visitCalendar', { p: ctx?.p, propertyId: ctx?.propertyId, enquiry: latest ?? enquiry })}>Schedule Visit</Btn>
         </View>
       </View>
@@ -1201,7 +1323,7 @@ export function EnquirySuccessScreen() {
 
 // ─── B-12 Visit Calendar ─────────────────────────────────────
 export function VisitCalendarScreen() {
-  const { go, back, ctx } = useNav();
+  const { completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const { property: p, propertyId, loading, error, reload } = usePropertyDetailFromContext(ctx);
   const enquiry = ctx?.enquiry as BuyEnquiry | undefined;
@@ -1239,7 +1361,7 @@ export function VisitCalendarScreen() {
         visitTime: slot,
         visitType: 'physical',
       });
-      go('visitConfirmation', { date: selectedDateLabel, slot, p, propertyId, enquiry, visit });
+      completeTo('visitConfirmation', { date: selectedDateLabel, slot, p, propertyId, enquiry, visit });
     } catch {
       setSubmitError('Could not schedule this visit. Please try another slot.');
     } finally {
@@ -1298,7 +1420,8 @@ export function VisitCalendarScreen() {
 
 // ─── B-13 Visit Confirmation ─────────────────────────────────
 export function VisitConfirmationScreen() {
-  const { go, ctx } = useNav();
+  const { go, resetTo, ctx } = useNav();
+  useFlowCompletionBack();
   const p: DisplayProperty = ctx?.p || EMPTY_PROPERTY;
   const visit = ctx?.visit as CustomerVisit | undefined;
   const isNRI = ctx?.isNRI || false;
@@ -1350,7 +1473,7 @@ export function VisitConfirmationScreen() {
           <Btn variant="outline" className="flex-1" icon="map-pin" onPress={() => Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(directionsQuery || 'Builtglory')}`)}>Directions</Btn>
           <Btn variant="outline" className="flex-1" icon="calendar" onPress={() => go('rescheduleVisit', { p, propertyId: ctx?.propertyId, visit, date: ctx?.date, slot: ctx?.slot })}>Reschedule</Btn>
         </View>
-        <Btn className="w-full" onPress={() => go('home')}>Done</Btn>
+        <Btn className="w-full" onPress={() => resetTo('home')}>Done</Btn>
       </View>
     </Screen>
   );
@@ -1358,7 +1481,7 @@ export function VisitConfirmationScreen() {
 
 // ─── B-13a NRI Video Call Scheduling ────────────────────────
 export function NRIVideoCallScreen() {
-  const { go, back, ctx } = useNav();
+  const { completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const p: DisplayProperty = ctx?.p || EMPTY_PROPERTY;
   const propertyId = ctx?.propertyId || propertyIdOf(p);
@@ -1391,7 +1514,7 @@ export function NRIVideoCallScreen() {
         visitType: 'virtual',
         virtualPlatform: 'whatsapp_video',
       });
-      go('nriVideoConfirm', { p, propertyId, enquiry, visit, date: dates.find((date) => date.iso === selectedDate)?.fullLabel ?? selectedDate, slot: selectedSlot, language });
+      completeTo('nriVideoConfirm', { p, propertyId, enquiry, visit, date: dates.find((date) => date.iso === selectedDate)?.fullLabel ?? selectedDate, slot: selectedSlot, language });
     } catch {
       setError('Could not schedule the video visit.');
     } finally {
@@ -1462,7 +1585,8 @@ export function NRIVideoCallScreen() {
 
 // ─── B-13b NRI Video Call Confirmation ───────────────────────
 export function NRIVideoCallConfirmScreen() {
-  const { go, ctx } = useNav();
+  const { go, resetTo, ctx } = useNav();
+  useFlowCompletionBack();
   const p: Property = ctx?.p || EMPTY_PROPERTY;
   const visit = ctx?.visit as CustomerVisit | undefined;
   return (
@@ -1483,7 +1607,7 @@ export function NRIVideoCallConfirmScreen() {
         </View>
         <View className="mt-6 flex-row gap-2 w-full">
           <Btn variant="outline" className="flex-1" onPress={() => go('myVisits')}>My Visits</Btn>
-          <Btn className="flex-1" onPress={() => go('home')}>Home</Btn>
+          <Btn className="flex-1" onPress={() => resetTo('home')}>Home</Btn>
         </View>
       </View>
     </Screen>
@@ -1575,6 +1699,15 @@ export function CompareScreen() {
   const { back, ctx } = useNav();
   const { property: a, loading, error, reload } = usePropertyDetailFromContext(ctx);
   const [b, setB] = useState<DisplayProperty | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerImages, setViewerImages] = useState<string[]>([]);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const openPropertyImages = useCallback((property: DisplayProperty, startIndex = 0) => {
+    if (!property.images.length) return;
+    setViewerImages(property.images);
+    setViewerIndex(Math.min(startIndex, property.images.length - 1));
+    setViewerOpen(true);
+  }, []);
   useEffect(() => {
     listCustomerProperties({ type: toBackendType(a.type), limit: 2, sort: 'newest' })
       .then((properties) => {
@@ -1601,9 +1734,11 @@ export function CompareScreen() {
           {[a, b].map((p, index) => (
             <View key={p?.id ?? `empty-${index}`} className="flex-1 rounded-card border border-ink-200 overflow-hidden">
               {p ? (
-                <PhotoPlaceholder tag={p.id} height={90}>
-                  {p.images[0] && <Image source={{ uri: p.images[0] }} className="absolute inset-0 w-full h-full" resizeMode="cover" />}
-                </PhotoPlaceholder>
+                <Pressable onPress={() => openPropertyImages(p)} accessibilityRole="imagebutton" accessibilityLabel={`Open images for ${p.title}`}>
+                  <PhotoPlaceholder tag={p.id} height={90}>
+                    {p.images[0] && <Image source={{ uri: p.images[0] }} className="absolute inset-0 w-full h-full" resizeMode="cover" />}
+                  </PhotoPlaceholder>
+                </Pressable>
               ) : (
                 <View className="h-[90px] bg-ink-50 items-center justify-center"><Icon name="search-x" size={22} color="#94A3B8" /></View>
               )}
@@ -1624,6 +1759,13 @@ export function CompareScreen() {
           ))}
         </View>
       </View>
+      <PropertyImageViewer
+        images={viewerImages}
+        visible={viewerOpen}
+        imageIndex={viewerIndex}
+        onClose={() => setViewerOpen(false)}
+        onImageIndexChange={setViewerIndex}
+      />
     </Screen>
   );
 }
@@ -1849,6 +1991,7 @@ export function FloorPlanScreen() {
     ? [{ label: `${p.bhk > 0 ? `${p.bhk} BHK` : 'Property'} — ${area || 'Area'} sqft` }]
     : [{ label: '2 BHK — 950 sqft' }, { label: '3 BHK — 1200 sqft' }, { label: '4 BHK — 1600 sqft' }];
   const [active, setActive] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(false);
   const { msg, fire } = useToast();
   return (
     <Screen dark>
@@ -1872,16 +2015,29 @@ export function FloorPlanScreen() {
         ))}
       </ScrollView>
       <View className="flex-1 items-center justify-center px-4">
-        <PhotoPlaceholder tag={'plan' + active + p.id} height={320} className="rounded-card w-full">
-          {floorPlanUrl && <Image source={{ uri: floorPlanUrl }} className="absolute inset-0 w-full h-full" resizeMode="contain" />}
-          <View className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/40 items-center justify-center"><Icon name="compass" size={16} color="white" /></View>
-          {floorPlanUrl && (
-            <Pressable onPress={() => openExternalUrl(floorPlanUrl).catch(() => fire('Could not open floor plan'))} className="absolute bottom-3 left-3 right-3 h-10 rounded-card bg-white/90 items-center justify-center">
-              <Text className="text-[12px] font-semibold text-ink-900">Open original floor plan</Text>
-            </Pressable>
-          )}
-        </PhotoPlaceholder>
+        <Pressable
+          onPress={() => floorPlanUrl && setViewerOpen(true)}
+          disabled={!floorPlanUrl}
+          accessibilityRole="imagebutton"
+          accessibilityLabel="Open floor plan image"
+          className="rounded-card w-full"
+        >
+          <PhotoPlaceholder tag={'plan' + active + p.id} height={320} className="rounded-card w-full">
+            {floorPlanUrl && <Image source={{ uri: floorPlanUrl }} className="absolute inset-0 w-full h-full" resizeMode="contain" />}
+            <View className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/40 items-center justify-center"><Icon name="compass" size={16} color="white" /></View>
+            {floorPlanUrl && (
+              <Pressable onPress={() => openExternalUrl(floorPlanUrl).catch(() => fire('Could not open floor plan'))} className="absolute bottom-3 left-3 right-3 h-10 rounded-card bg-white/90 items-center justify-center">
+                <Text className="text-[12px] font-semibold text-ink-900">Open original floor plan</Text>
+              </Pressable>
+            )}
+          </PhotoPlaceholder>
+        </Pressable>
       </View>
+      <PropertyImageViewer
+        images={floorPlanUrl ? [floorPlanUrl] : []}
+        visible={viewerOpen}
+        onClose={() => setViewerOpen(false)}
+      />
       <Toast message={msg} />
     </Screen>
   );
@@ -1889,7 +2045,7 @@ export function FloorPlanScreen() {
 
 // ─── B-12a Reschedule Visit ───────────────────────────────────
 export function RescheduleVisitScreen() {
-  const { go, back, ctx } = useNav();
+  const { completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const p: DisplayProperty = ctx?.p || EMPTY_PROPERTY;
   const propertyId = String(ctx?.propertyId || propertyIdOf(p));
@@ -1929,7 +2085,7 @@ export function RescheduleVisitScreen() {
         visitTime: slot,
         reason: 'Customer requested a new slot from the app.',
       });
-      go('visitConfirmation', { date: selectedDateLabel, slot, p, propertyId, visit: updatedVisit, rescheduled: true });
+      completeTo('visitConfirmation', { date: selectedDateLabel, slot, p, propertyId, visit: updatedVisit, rescheduled: true });
     } catch {
       setError('Could not reschedule this visit.');
     } finally {

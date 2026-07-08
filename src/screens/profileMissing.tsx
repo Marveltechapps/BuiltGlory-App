@@ -7,6 +7,8 @@ import { useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
 import { BuyEnquiry, listBuyEnquiries, listSellRequests, SellRequest, sendCustomerOtp, verifyCustomerOtp } from '../api/customer';
 import { BUY_ENQUIRIES_CACHE_PREFIX, SELL_LISTINGS_CACHE_PREFIX } from '../state/primaryTabCache';
+import { usePolling } from '../hooks/usePolling';
+import { enquiryDisplayColor, getEnquiryDisplayStatus } from '../utils/buyEnquiryStatus';
 
 function apiMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -264,7 +266,8 @@ export function MyEnquiriesConsolidatedScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const loadEnquiries = async (force = false) => {
+  const loadEnquiries = async (options: { force?: boolean; silent?: boolean } = {}) => {
+    const { force = false, silent = false } = options;
     if (!authToken) {
       setError('Please sign in again to load your enquiries.');
       setRefreshing(false);
@@ -276,9 +279,9 @@ export function MyEnquiriesConsolidatedScreen() {
       setEnquiries(cached);
       setLoading(false);
       setError('');
-    } else if (force) {
+    } else if (force && !silent) {
       setRefreshing(true);
-    } else {
+    } else if (!silent) {
       setLoading(true);
     }
     if (!cached) setError('');
@@ -296,12 +299,13 @@ export function MyEnquiriesConsolidatedScreen() {
   useEffect(() => {
     loadEnquiries();
   }, [authToken]);
+  usePolling(() => loadEnquiries({ force: true, silent: true }), 15000, Boolean(authToken));
   const filtered = tab === 'all' ? enquiries : enquiries.filter((e) => {
     const status = String(e.status || 'new');
     return tab === 'active' ? isActiveEnquiry(status) : status === tab;
   });
   return (
-    <Screen refreshing={refreshing} onRefresh={() => loadEnquiries(true)}>
+    <Screen refreshing={refreshing} onRefresh={() => loadEnquiries({ force: true })}>
       <TopBar onBack={back} title="My Enquiries" sub={`${enquiries.length} total`} />
       <View className="px-4">
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }} className="mb-3">
@@ -309,7 +313,7 @@ export function MyEnquiriesConsolidatedScreen() {
             <Chip key={t} active={tab === t} onPress={() => setTab(t)}>{t === 'all' ? 'All' : enquiryStatusLabel(t)}</Chip>
           ))}
         </ScrollView>
-        {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={() => loadEnquiries(true)} /></View>}
+        {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={() => loadEnquiries({ force: true })} /></View>}
         {loading && <LoadingBlock label="Loading your enquiries..." />}
         {!loading && !error && enquiries.length === 0 && (
           <View className="py-12 items-center"><Icon name="inbox" size={40} color="#CBD5E1" /><Text className="mt-2 text-[13px] text-ink-400">No enquiries yet</Text><Btn className="mt-4" icon="search" onPress={() => go('home')}>Browse Properties</Btn></View>
@@ -319,7 +323,7 @@ export function MyEnquiriesConsolidatedScreen() {
             <Pressable key={enquiryId(e)} onPress={() => go('enquiryDetail', { enquiryId: enquiryId(e), enquiry: e })} className="rounded-card border border-ink-200 overflow-hidden bg-white flex-row gap-3 p-3">
               <PhotoPlaceholder tag={enquiryId(e)} width={64} height={64} className="rounded-md" />
               <View className="flex-1">
-                <View className="flex-row items-center gap-2 mb-0.5"><Text className="text-[13px] font-semibold flex-1" numberOfLines={1}>{enquiryProperty(e)?.title || e.propertySnapshot?.title || e.referenceId || 'Property enquiry'}</Text><Badge color={enquiryStatusColor(e.status)}>{enquiryStatusLabel(e.status)}</Badge></View>
+                <View className="flex-row items-center gap-2 mb-0.5"><Text className="text-[13px] font-semibold flex-1" numberOfLines={1}>{enquiryProperty(e)?.title || e.propertySnapshot?.title || e.referenceId || 'Property enquiry'}</Text><Badge color={enquiryDisplayColor(e)}>{getEnquiryDisplayStatus(e)}</Badge></View>
                 <Text className="text-[11px] text-ink-500" numberOfLines={1}>{enquiryProperty(e)?.city || e.propertySnapshot?.location || 'Location pending'} · {formatINR(enquiryProperty(e)?.price || e.propertySnapshot?.price || 0)}</Text>
                 <Text className="text-[10.5px] text-ink-600 mt-1">{e.visits?.length ? `${e.visits.length} visit record(s)` : e.submittedAt ? `Submitted ${new Date(e.submittedAt).toLocaleDateString()}` : 'Awaiting advisor update'}</Text>
               </View>

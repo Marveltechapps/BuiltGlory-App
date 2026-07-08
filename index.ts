@@ -1,3 +1,4 @@
+import './src/setup/androidText';
 import { registerRootComponent } from 'expo';
 
 import App from './App';

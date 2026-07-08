@@ -92,7 +92,7 @@ function MainTabs() {
   return (
     <Tab.Navigator
       initialRouteName="HomeTab"
-      backBehavior="history"
+      backBehavior="firstRoute"
       detachInactiveScreens={false}
       screenOptions={{ headerShown: false, lazy: true }}
       tabBar={(props) => <AppTabBar {...props} />}

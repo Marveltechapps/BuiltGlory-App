@@ -1,5 +1,5 @@
 import { BuyEnquiry, CustomerNotification, CustomerProperty, CustomerVisit, SellRequest } from '../api/customer';
-import { Property } from '../data/data';
+import { Property, normalizePropertyTypeKey, PROPERTY_TYPE_SLUG_TO_BACKEND } from '../data/data';
 
 export type DisplayProperty = Property & { backend?: CustomerProperty };
 export type HomeFeedCache = { featured: DisplayProperty[]; upcoming: DisplayProperty[] };
@@ -24,11 +24,12 @@ export const VISITS_CACHE_PREFIX = 'screen:visits:list';
 export const CONTENT_ITEM_CACHE_PREFIX = 'content:item';
 
 export const TYPE_TO_BACKEND: Record<string, string> = {
-  '3d-print': '3d_printing',
-  organic: 'organic_home',
-  'ceo-mansion': 'ceo_mansion',
-  holiday: 'holiday_home',
+  ...PROPERTY_TYPE_SLUG_TO_BACKEND,
 };
+
+const BACKEND_TO_APP_SLUG = Object.fromEntries(
+  Object.entries(PROPERTY_TYPE_SLUG_TO_BACKEND).map(([slug, backend]) => [backend, slug]),
+);
 
 export function contentItemCacheKey(slug: string) {
   return `${CONTENT_ITEM_CACHE_PREFIX}:${slug}`;
@@ -36,7 +37,7 @@ export function contentItemCacheKey(slug: string) {
 
 export function toBackendType(type?: string) {
   if (!type) return undefined;
-  return TYPE_TO_BACKEND[type] ?? type;
+  return normalizePropertyTypeKey(type) ?? TYPE_TO_BACKEND[type] ?? type;
 }
 
 export function toNumber(value: unknown, fallback = 0) {
@@ -44,22 +45,33 @@ export function toNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export function propertyMediaImages(media?: { coverPhoto?: string; photos?: string[] }): string[] {
+  const photos = media?.photos ?? [];
+  const cover = media?.coverPhoto;
+  const combined = cover ? [cover, ...photos] : photos;
+  const seen = new Set<string>();
+  return combined.filter((url): url is string => {
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
 export function toDisplayProperty(property: CustomerProperty): DisplayProperty {
   const id = String(property._id ?? property.id ?? property.referenceId ?? '');
   const area = toNumber(property.specs?.builtUpArea ?? property.specs?.carpetArea ?? property.specs?.plotArea);
-  const photos = property.media?.photos ?? [];
   return {
     id,
     title: property.title ?? 'Untitled property',
     price: toNumber(property.price),
-    type: property.type ?? 'residential',
+    type: normalizePropertyTypeKey(property.type) ?? property.type ?? 'residential',
     bhk: toNumber(property.specs?.bhk),
     area,
     floor: property.specs?.floor ?? '—',
     flatNo: property.address?.line2 ?? '—',
     location: property.address?.locality ?? property.address?.line1 ?? property.address?.city ?? 'Location unavailable',
     city: property.address?.city ?? '',
-    images: property.media?.coverPhoto ? [property.media.coverPhoto, ...photos] : photos,
+    images: propertyMediaImages(property.media),
     amenities: property.amenities ?? [],
     verified: property.status === 'available',
     negotiable: !!property.isNegotiable,
@@ -79,7 +91,8 @@ export function toDisplayProperty(property: CustomerProperty): DisplayProperty {
 export function buildBuyTypeCounts(properties: CustomerProperty[]) {
   const next: Record<string, number> = {};
   properties.forEach((property) => {
-    const appType = Object.entries(TYPE_TO_BACKEND).find(([, backendType]) => backendType === property.type)?.[0] ?? property.type ?? 'residential';
+    const backendType = normalizePropertyTypeKey(property.type) ?? property.type ?? 'residential';
+    const appType = BACKEND_TO_APP_SLUG[backendType] ?? backendType;
     next[appType] = (next[appType] ?? 0) + 1;
   });
   return next;

@@ -1,9 +1,194 @@
-import React from 'react';
-import { Linking, View, Text, Pressable } from 'react-native';
+import React, { useState } from 'react';
+import { Linking, Platform, View, Text, Pressable } from 'react-native';
+import Constants from 'expo-constants';
+import * as StoreReview from 'expo-store-review';
 import Icon from '../components/Icon';
-import { Screen, TopBar } from '../components/shared';
+import { BrandLogo } from '../components/BrandLogo';
+import { Btn, FadeInView, Field, Input, Screen, TopBar } from '../components/shared';
 import { useNav } from '../navigation/useNav';
+import { useAppState } from '../state/AppState';
+import { createAppFeedback, getPublicAppConfig } from '../api/customer';
 import { contentBody, contentMetaArray, contentMetaString, fallbackAboutContent, useContentItem } from '../content';
+
+const STORE_FALLBACK_URL = Platform.OS === 'android' ? 'https://play.google.com/store/apps' : 'https://apps.apple.com';
+const RATING_LABELS = ['', 'Poor', 'Fair', 'Good', 'Great', 'Excellent'];
+
+function androidStoreUrl(packageName: string) {
+  return `https://play.google.com/store/apps/details?id=${packageName}`;
+}
+
+async function resolveStoreUrl() {
+  try {
+    const config = await getPublicAppConfig();
+    const configured = Platform.OS === 'android' ? config.storeUrls.android : config.storeUrls.ios;
+    if (configured && configured !== STORE_FALLBACK_URL) return configured;
+  } catch {
+    // fall through to platform defaults
+  }
+  if (Platform.OS === 'android') {
+    const packageName = Constants.expoConfig?.android?.package || 'com.builtglory.builtglory';
+    return androidStoreUrl(packageName);
+  }
+  return STORE_FALLBACK_URL;
+}
+
+async function openAppStoreRating() {
+  if (await StoreReview.isAvailableAsync()) {
+    await StoreReview.requestReview();
+  }
+  const storeUrl = await resolveStoreUrl();
+  const canOpen = await Linking.canOpenURL(storeUrl);
+  if (canOpen) {
+    await Linking.openURL(storeUrl);
+    return;
+  }
+  await Linking.openURL(STORE_FALLBACK_URL);
+}
+
+function StarRating({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (rating: number) => void;
+}) {
+  return (
+    <View className="items-center">
+      <View className="flex-row gap-2">
+        {[1, 2, 3, 4, 5].map((star) => {
+          const filled = star <= value;
+          return (
+            <Pressable
+              key={star}
+              onPress={() => onChange(star)}
+              accessibilityRole="button"
+              accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+              className="p-1"
+            >
+              <Icon
+                name="star"
+                size={36}
+                color={filled ? '#F59E0B' : '#CBD5E1'}
+                fill={filled ? '#F59E0B' : 'none'}
+                strokeWidth={filled ? 1.5 : 2}
+              />
+            </Pressable>
+          );
+        })}
+      </View>
+      {value > 0 && (
+        <Text className="mt-2 text-[13px] font-semibold text-amber-600">{RATING_LABELS[value]}</Text>
+      )}
+    </View>
+  );
+}
+
+// ─── Rate the App ─────────────────────────────────────────────
+export function RateAppScreen() {
+  const { back } = useNav();
+  const { authToken } = useAppState();
+  const [rating, setRating] = useState(0);
+  const [feedback, setFeedback] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState('');
+
+  const submitRating = async () => {
+    if (rating < 1) {
+      setError('Please select a star rating before submitting.');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
+    try {
+      if (authToken) {
+        const message = feedback.trim()
+          ? `App rating: ${rating}/5 — ${feedback.trim()}`
+          : `App rating: ${rating}/5`;
+        await createAppFeedback(authToken, {
+          message,
+          source: 'customer_app',
+          sourceScreen: 'rateApp',
+          metadata: { rating, feedback: feedback.trim() || undefined },
+        });
+      }
+      await openAppStoreRating();
+      setSubmitted(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not submit your rating. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (submitted) {
+    return (
+      <Screen>
+        <TopBar onBack={back} title="Rate the App" />
+        <View className="flex-1 px-6 justify-center items-center">
+          <FadeInView className="items-center w-full">
+            <View className="w-20 h-20 rounded-full bg-emerald-100 items-center justify-center mb-5">
+              <Icon name="heart" size={40} color="#10B981" fill="#10B981" strokeWidth={1.5} />
+            </View>
+            <Text className="text-[20px] font-bold text-ink-900 text-center">Thank you!</Text>
+            <Text className="text-[14px] text-ink-600 text-center mt-2 leading-relaxed max-w-[280px]">
+              Your feedback helps us improve BuiltGlory for everyone. We truly appreciate you taking the time.
+            </Text>
+            <View className="w-full mt-8">
+              <Btn onPress={back}>Done</Btn>
+            </View>
+          </FadeInView>
+        </View>
+      </Screen>
+    );
+  }
+
+  return (
+    <Screen>
+      <TopBar onBack={back} title="Rate the App" sub="Share your experience" />
+      <View className="px-4 pb-8 gap-6">
+        <FadeInView className="items-center pt-2">
+          <BrandLogo size={80} />
+          <Text className="text-[20px] font-bold text-ink-900 mt-4">Enjoying BuiltGlory?</Text>
+          <Text className="text-[13px] text-ink-600 text-center mt-2 leading-relaxed max-w-[300px]">
+            Your rating on the {Platform.OS === 'ios' ? 'App Store' : 'Play Store'} helps others discover trusted real estate listings.
+          </Text>
+        </FadeInView>
+
+        <FadeInView delay={80} className="p-5 rounded-card bg-ink-50 border border-ink-100">
+          <Text className="text-[13px] font-semibold text-ink-700 text-center mb-4">How would you rate your experience?</Text>
+          <StarRating value={rating} onChange={(v) => { setRating(v); setError(''); }} />
+        </FadeInView>
+
+        <FadeInView delay={140}>
+          <Field label="Additional feedback" hint="Optional — tell us what you love or what we can improve">
+            <Input
+              multiline
+              placeholder="Share your thoughts…"
+              value={feedback}
+              onChangeText={setFeedback}
+            />
+          </Field>
+        </FadeInView>
+
+        {!!error && (
+          <View className="p-3 rounded-card border border-rose-200 bg-rose-50">
+            <Text className="text-[12px] text-rose-700">{error}</Text>
+          </View>
+        )}
+
+        <FadeInView delay={200} className="gap-3 mt-2">
+          <Btn onPress={submitRating} disabled={rating < 1 || submitting} icon="star">
+            {submitting ? 'Submitting…' : 'Submit Rating'}
+          </Btn>
+          <Btn variant="ghost" onPress={back} disabled={submitting}>
+            Maybe Later
+          </Btn>
+        </FadeInView>
+      </View>
+    </Screen>
+  );
+}
 
 // ─── A-08 About Us ────────────────────────────────────────────
 export function AboutUsScreen() {
@@ -25,7 +210,7 @@ export function AboutUsScreen() {
           </Pressable>
         )}
         <View className="flex-row items-center gap-4 p-4 rounded-card bg-brand-50 border border-brand-200 mb-6">
-          <View className="w-16 h-16 rounded-2xl bg-brand-600 items-center justify-center"><Text className="text-white font-black text-3xl">B</Text></View>
+          <BrandLogo size={64} />
           <View>
             <Text className="text-[16px] font-bold text-ink-900">BUILTGLORY</Text>
             <Text className="text-[12px] text-ink-600">Version {contentMetaString(about, 'version', '1.0.0')}</Text>

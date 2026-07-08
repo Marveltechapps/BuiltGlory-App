@@ -7,6 +7,7 @@ import {
   getFavoriteProperties,
   logoutCustomerSession,
   refreshCustomerSession,
+  removeCustomerPushToken,
   saveCustomerProperty,
   setCustomerSessionRefreshHandler,
   unsaveCustomerProperty,
@@ -15,6 +16,7 @@ import {
 } from '../api/customer';
 import { FAVORITE_IDS_CACHE_PREFIX } from './primaryTabCache';
 import { preloadPrimaryTabs } from './preload';
+import { registerForFcmPushNotificationsAsync } from '../services/notifications';
 
 const AUTH_SESSION_KEY = 'builtglory.authSession';
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60_000;
@@ -297,11 +299,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     const raw = await getStoredValue(AUTH_SESSION_KEY);
+    const token = await registerForFcmPushNotificationsAsync().catch(() => null);
     if (raw) {
       try {
         const storedSession = JSON.parse(raw) as Partial<StoredAuthSession>;
         if (storedSession.refreshToken) {
           await logoutCustomerSession(authToken ?? storedSession.accessToken ?? null, storedSession.refreshToken);
+        }
+        if (token && (authToken || storedSession.accessToken)) {
+          await removeCustomerPushToken(authToken ?? storedSession.accessToken ?? '', token).catch(() => undefined);
         }
       } catch {
         // Local sign-out must still complete if the revoke request fails.

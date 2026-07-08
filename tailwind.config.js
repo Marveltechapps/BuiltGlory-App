@@ -30,6 +30,13 @@ module.exports = {
       borderRadius: {
         card: '12px',
       },
+      lineHeight: {
+        // Safer than leading-none / leading-tight on Android (avoids glyph clipping).
+        display: '1.3',
+        'display-tight': '1.35',
+        caption: '1.45',
+        relaxed: '1.55',
+      },
     },
   },
   plugins: [],

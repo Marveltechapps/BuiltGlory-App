@@ -12,10 +12,12 @@ import {
   Modal as RNModal,
   ActivityIndicator,
   Switch,
+  type TextInputProps,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from './Icon';
 import { formatINR, formatPropertyTypeLabel, Property } from '../data/data';
+import { androidInputStyle, lineHeightFor } from '../setup/androidText';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const MOTION = {
@@ -191,8 +193,8 @@ export function EmptyState({
       >
         <Icon name={icon} size={30} color="#1A6FFF" />
       </Animated.View>
-      <Text className="mt-3 text-[14px] font-semibold text-ink-800 text-center">{title}</Text>
-      {!!body && <Text className="mt-1 text-[11.5px] text-ink-500 text-center">{body}</Text>}
+      <Text className="mt-3 text-[14px] font-semibold text-ink-800 text-center" style={{ lineHeight: lineHeightFor(14) }}>{title}</Text>
+      {!!body && <Text className="mt-1 text-[11.5px] text-ink-500 text-center" style={{ lineHeight: lineHeightFor(11.5) }}>{body}</Text>}
       {!!action && !!onPress && <Btn className="mt-4" size="sm" onPress={onPress}>{action}</Btn>}
     </FadeInView>
   );
@@ -415,11 +417,12 @@ export function Btn({
 }) {
   const { scale, pressIn, pressOut } = usePressScale(disabled);
   const sizes: Record<BtnSize, string> = {
-    sm: 'px-3 h-9',
-    md: 'px-4 h-[52px]',
-    lg: 'px-5 h-14',
+    sm: 'px-3 min-h-[36px] py-2',
+    md: 'px-4 min-h-[52px] py-3.5',
+    lg: 'px-5 min-h-[56px] py-4',
   };
   const textSizes: Record<BtnSize, string> = { sm: 'text-sm', md: 'text-[15px]', lg: 'text-base' };
+  const textLineHeights: Record<BtnSize, number> = { sm: lineHeightFor(14), md: lineHeightFor(15), lg: lineHeightFor(16) };
   const variants: Record<BtnVariant, { bg: string; text: string }> = {
     primary: { bg: 'bg-brand-600', text: 'text-white' },
     outline: { bg: 'bg-white border border-ink-200', text: 'text-ink-900' },
@@ -440,7 +443,7 @@ export function Btn({
       style={{ transform: [{ scale }] }}
     >
       {icon && <Icon name={icon} size={18} color={iconColor} />}
-      <Text className={`font-semibold ${textSizes[size]} ${v.text}`}>{children}</Text>
+      <Text className={`shrink-0 font-semibold ${textSizes[size]} ${v.text}`} style={{ lineHeight: textLineHeights[size] }}>{children}</Text>
       {iconRight && <Icon name={iconRight} size={18} color={iconColor} />}
     </AnimatedPressable>
   );
@@ -469,13 +472,14 @@ export function TopBar({
           <Icon name="arrow-left" size={22} color={dark ? '#fff' : '#0F172A'} />
         </Pressable>
       )}
-      <View className="flex-1 min-w-0">
+      <View className="flex-1 min-w-0 shrink">
         <Text
           className={`${large ? 'text-[22px] font-bold' : 'text-[18px] font-semibold'} tracking-tight ${dark ? 'text-white' : 'text-ink-900'}`}
+          style={{ lineHeight: lineHeightFor(large ? 22 : 18) }}
         >
           {title}
         </Text>
-        {sub && <Text className={`text-xs ${dark ? 'text-white/70' : 'text-ink-500'}`}>{sub}</Text>}
+        {sub && <Text className={`text-xs ${dark ? 'text-white/70' : 'text-ink-500'}`} style={{ lineHeight: lineHeightFor(12) }}>{sub}</Text>}
       </View>
       {right}
     </View>
@@ -497,13 +501,13 @@ export function Field({
   return (
     <View>
       {label && (
-        <Text className="mb-2 text-[13px] font-medium text-ink-700">
+        <Text className="mb-2 text-[13px] font-medium text-ink-700" style={{ lineHeight: lineHeightFor(13) }}>
           {label}
           {required && <Text className="text-rose-500"> *</Text>}
         </Text>
       )}
       {children}
-      {hint && <Text className="mt-1.5 text-[11px] text-ink-500">{hint}</Text>}
+      {hint && <Text className="mt-1.5 text-[11px] text-ink-500" style={{ lineHeight: lineHeightFor(11) }}>{hint}</Text>}
     </View>
   );
 }
@@ -520,6 +524,9 @@ export function Input({
   secureTextEntry,
   multiline,
   editable = true,
+  autoCapitalize,
+  autoComplete,
+  textContentType,
 }: {
   icon?: string;
   prefix?: string;
@@ -527,11 +534,14 @@ export function Input({
   value?: string;
   onChangeText?: (v: string) => void;
   placeholder?: string;
-  keyboardType?: any;
+  keyboardType?: TextInputProps['keyboardType'];
   maxLength?: number;
   secureTextEntry?: boolean;
   multiline?: boolean;
   editable?: boolean;
+  autoCapitalize?: TextInputProps['autoCapitalize'];
+  autoComplete?: TextInputProps['autoComplete'];
+  textContentType?: TextInputProps['textContentType'];
 }) {
   const [focused, setFocused] = useState(false);
   const focus = useRef(new Animated.Value(0)).current;
@@ -548,11 +558,11 @@ export function Input({
   });
   return (
     <Animated.View
-      className={`flex-row items-center gap-2 ${multiline ? 'min-h-[90px] items-start py-3' : 'h-12'} px-3 bg-white border border-ink-200 rounded-card ${className}`}
+      className={`flex-row items-center gap-2 ${multiline ? 'min-h-[90px] items-start py-3' : 'min-h-[48px] py-2.5'} px-3 bg-white border border-ink-200 rounded-card ${className}`}
       style={{ borderColor }}
     >
       {icon && <Icon name={icon} size={16} color="#94A3B8" />}
-      {prefix && <Text className="text-ink-500 text-sm font-medium">{prefix}</Text>}
+      {prefix && <Text className="text-ink-500 text-sm font-medium" style={{ lineHeight: lineHeightFor(14) }}>{prefix}</Text>}
       <TextInput
         value={value}
         onChangeText={onChangeText}
@@ -562,13 +572,15 @@ export function Input({
         secureTextEntry={secureTextEntry}
         multiline={multiline}
         editable={editable}
+        autoCapitalize={autoCapitalize}
+        autoComplete={autoComplete}
+        textContentType={textContentType}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         placeholderTextColor="#94A3B8"
         className="flex-1 text-[14px] text-ink-900"
         style={{
-          lineHeight: multiline ? undefined : 20,
-          paddingVertical: 0,
+          ...androidInputStyle(14),
           textAlignVertical: multiline ? 'top' : 'center',
         }}
       />
@@ -598,7 +610,7 @@ export function Chip({
       style={{ transform: [{ scale }] }}
     >
       {icon && <Icon name={icon} size={12} color={active ? '#fff' : '#334155'} />}
-      <Text className={`text-[12px] font-medium ${active ? 'text-white' : 'text-ink-700'}`}>{children}</Text>
+      <Text className={`text-[12px] font-medium ${active ? 'text-white' : 'text-ink-700'}`} style={{ lineHeight: lineHeightFor(12) }}>{children}</Text>
     </AnimatedPressable>
   );
 }
@@ -615,9 +627,9 @@ export function Badge({ color = 'brand', children, icon }: { color?: string; chi
   const cls = BADGE_MAP[color] || BADGE_MAP.brand;
   const [bg, text] = cls.split(' text-').map((s, i) => (i === 0 ? s : 'text-' + s));
   return (
-    <View className={`flex-row items-center gap-1 px-2 py-0.5 rounded-full ${bg}`}>
+    <View className={`flex-row items-center gap-1 px-2 py-1 rounded-full ${bg}`}>
       {icon && <Icon name={icon} size={10} />}
-      <Text className={`text-[10.5px] font-semibold ${text}`}>{children}</Text>
+      <Text className={`text-[10.5px] font-semibold ${text}`} style={{ lineHeight: lineHeightFor(10.5) }}>{children}</Text>
     </View>
   );
 }
@@ -693,7 +705,7 @@ export function PropertyCard({
         </View>
       </PhotoPlaceholder>
       <View className="p-3">
-        <Text className="text-[15px] font-semibold text-ink-900 leading-snug" numberOfLines={1}>{p.title}</Text>
+        <Text className="text-[15px] font-semibold text-ink-900 leading-display-tight" numberOfLines={1}>{p.title}</Text>
         <Text className="mt-2 text-[18px] font-bold text-brand-600">{formatINR(p.price)}</Text>
         <View className="mt-2 flex-row items-center gap-3">
           {p.bhk > 0 && (
@@ -787,7 +799,7 @@ function BottomNavButton({
       accessibilityLabel={`${item.label} tab`}
       accessibilityState={{ selected }}
       hitSlop={8}
-      className="flex-1 h-[58px] items-center justify-center rounded-full"
+      className="flex-1 min-h-[58px] py-1 items-center justify-center rounded-full"
     >
       <Animated.View className="h-8 min-w-10 px-2 rounded-full items-center justify-center" style={iconMotion}>
         {showProfilePhoto ? (
@@ -796,9 +808,14 @@ function BottomNavButton({
           <Icon name={item.icon} size={22} color={selected ? '#1259D4' : '#475569'} strokeWidth={selected ? 2.3 : 2} />
         )}
       </Animated.View>
-      <Animated.Text className={`mt-0.5 text-[11px] leading-none ${selected ? 'text-brand-700 font-bold' : 'text-ink-700 font-medium'}`} style={labelMotion}>
-        {item.label}
-      </Animated.Text>
+      <Animated.View style={labelMotion}>
+        <Text
+          className={`mt-0.5 text-[11px] leading-caption ${selected ? 'text-brand-700 font-bold' : 'text-ink-700 font-medium'}`}
+          style={{ lineHeight: lineHeightFor(11) }}
+        >
+          {item.label}
+        </Text>
+      </Animated.View>
     </PressableScale>
   );
 }

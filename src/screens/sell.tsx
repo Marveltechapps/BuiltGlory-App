@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Keyboard, KeyboardAvoidingView, Platform, View, Text, Pressable, ScrollView, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { androidInputStyle } from '../setup/androidText';
 import * as ImagePicker from 'expo-image-picker';
 import Icon from '../components/Icon';
 import {
@@ -16,18 +17,59 @@ import { ChatSocket, createChatSocket } from '../realtime/chatSocket';
 import {
   createCallbackRequest,
   createSellRequestDraft,
+  getSellRequest,
   getSellerActivity,
   listSellRequests,
   sendSellerMessage,
   SellerActivity,
   SellRequest,
+  SellRequestDocument,
   submitSellerVisitAction,
   updateSellRequest,
   uploadCustomerDocument,
 } from '../api/customer';
 
 export const sellRequestIdOf = (request?: SellRequest | null) => request?._id ?? request?.id ?? '';
-export const ctxSellRequestId = (ctx?: any) => String(ctx?.sellRequestId ?? sellRequestIdOf(ctx?.sellRequest) ?? '').trim();
+export const ctxSellRequestId = (ctx?: any) =>
+  String(ctx?.sellRequestId ?? ctx?.listingId ?? sellRequestIdOf(ctx?.sellRequest) ?? '').trim();
+
+export const SELL_DRAFT_STEP_SCREENS: Record<number, string> = {
+  1: 'sellIntent',
+  2: 'sellAddress',
+  3: 'sellDetails',
+  4: 'sellPhotos',
+  5: 'sellAmenities',
+  6: 'sellPrice',
+  7: 'sellReview',
+};
+
+export function sellDraftResumeScreen(draftStep?: number) {
+  return SELL_DRAFT_STEP_SCREENS[draftStep ?? 1] ?? 'sellIntent';
+}
+
+export function sellDraftResumeContext(request?: SellRequest | null) {
+  if (!request) return {};
+  return {
+    type: request.propertyType,
+    sellRequest: request,
+    sellRequestId: sellRequestIdOf(request),
+    price: request.askingPrice ? String(request.askingPrice) : undefined,
+    negotiable: request.negotiable,
+    amenities: request.amenities,
+    photos: sellRequestPhotoUrls(request),
+  };
+}
+
+export function sellRequestPhotoUrls(request?: SellRequest | null, ctx?: any): string[] {
+  const fromRequest = (request?.photos ?? []).filter(Boolean) as string[];
+  if (fromRequest.length) return fromRequest;
+  const fromCtx = Array.isArray(ctx?.photos) ? (ctx.photos as unknown[]).filter(Boolean) as string[] : [];
+  if (fromCtx.length) return fromCtx;
+  return (request?.documents ?? [])
+    .filter((doc) => doc.fileUrl && doc.status !== 'rejected' && doc.status !== 'missing')
+    .map((doc) => doc.fileUrl!)
+    .filter(Boolean);
+}
 
 function photoFileName(photo: ImagePicker.ImagePickerAsset, index: number) {
   const fromAsset = photo.fileName?.trim();
@@ -92,21 +134,25 @@ export function useSellerActivityContext(ctx: any) {
   const [request, setRequest] = useState<SellRequest | null>(ctx?.sellRequest ?? ctx?.p ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!authToken || !sellRequestId) return;
-    setLoading(true);
-    setError('');
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const next = await getSellerActivity(authToken, sellRequestId);
       setActivity(next);
       setRequest(next.sellRequest);
     } catch (e) {
-      setError(apiMessage(e, 'Unable to load seller activity.'));
+      if (!silent) setError(apiMessage(e, 'Unable to load seller activity.'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [authToken, sellRequestId]);
+  useEffect(() => {
+    load(Boolean(ctx?.refresh));
+  }, [authToken, sellRequestId, ctx?.refresh]);
   return { authToken, sellRequestId, activity, request, setActivity, setRequest, loading, error, load };
 }
 
@@ -280,7 +326,7 @@ export function SellBasicScreen() {
         </Field>
       </View>
       <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={!isValid || saving} className={`w-full h-12 rounded-xl items-center justify-center ${isValid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={saveAndContinue} disabled={!isValid || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${isValid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${isValid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Continue to Location'}</Text>
         </Pressable>
       </View>
@@ -339,7 +385,7 @@ export function SellLocationScreen() {
         </View>
       </View>
       <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={!valid || saving} className={`w-full h-12 rounded-xl items-center justify-center ${valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={saveAndContinue} disabled={!valid || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${valid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Continue'}</Text>
         </Pressable>
       </View>
@@ -351,10 +397,26 @@ export function SellLocationScreen() {
 export function SellPhotosScreen() {
   const { go, back, ctx } = useNav();
   const { authToken } = useAppState();
+  const sellRequestId = ctxSellRequestId(ctx);
+  const [sellRequest, setSellRequest] = useState<SellRequest | null>(ctx?.sellRequest ?? null);
+  const [existingPhotos, setExistingPhotos] = useState<string[]>(() => sellRequestPhotoUrls(ctx?.sellRequest, ctx));
   const [photos, setPhotos] = useState<ImagePicker.ImagePickerAsset[]>([]);
+  const [loadingExisting, setLoadingExisting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const MIN = 5;
+  const totalSelected = existingPhotos.length + photos.length;
+  useEffect(() => {
+    if (!authToken || !sellRequestId) return;
+    setLoadingExisting(true);
+    getSellRequest(authToken, sellRequestId)
+      .then((request) => {
+        setSellRequest(request);
+        setExistingPhotos(sellRequestPhotoUrls(request, ctx));
+      })
+      .catch((e) => setError(apiMessage(e, 'Unable to load saved photos for this listing.')))
+      .finally(() => setLoadingExisting(false));
+  }, [authToken, sellRequestId]);
   const pickPhotos = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) return;
@@ -379,9 +441,9 @@ export function SellPhotosScreen() {
     });
   };
   const removePhoto = (uri: string) => setPhotos((current) => current.filter((photo) => photo.uri !== uri));
+  const removeExistingPhoto = (url: string) => setExistingPhotos((current) => current.filter((photo) => photo !== url));
   const saveAndContinue = async () => {
-    const sellRequestId = ctxSellRequestId(ctx);
-    if (photos.length < MIN || saving || !authToken || !sellRequestId) return;
+    if (totalSelected < MIN || saving || !authToken || !sellRequestId) return;
     setSaving(true);
     setError('');
     try {
@@ -391,7 +453,7 @@ export function SellPhotosScreen() {
             ownerType: 'sell_request',
             ownerId: sellRequestId,
             purpose: 'property_media',
-            documentType: index === 0 ? 'cover_photo' : 'photo',
+            documentType: existingPhotos.length === 0 && index === 0 ? 'cover_photo' : 'photo',
             file: {
               uri: photo.uri,
               name: photoFileName(photo, index),
@@ -403,21 +465,28 @@ export function SellPhotosScreen() {
       const uploadedPhotoUrls = uploadedDocs
         .map((doc) => doc.url)
         .filter((url): url is string => Boolean(url));
-      if (uploadedPhotoUrls.length < MIN) {
+      const allPhotoUrls = [...existingPhotos, ...uploadedPhotoUrls].filter(Boolean);
+      if (allPhotoUrls.length < MIN) {
         throw new Error('Photos uploaded, but secure media URLs are not available yet.');
       }
-      const sellRequest = await updateSellRequest(authToken, sellRequestId, {
-        photos: uploadedPhotoUrls,
-        documents: uploadedDocs.map((doc, index) => ({
-          documentId: doc._id ?? doc.id,
-          name: doc.fileName ?? photoFileName(photos[index], index),
-          status: doc.status === 'uploaded' ? 'uploaded' : 'pending',
-          scanStatus: doc.scanStatus,
-          fileUrl: doc.url,
-        })),
+      const existingDocuments = (sellRequest?.documents ?? ctx?.sellRequest?.documents ?? []).filter(
+        (doc: SellRequestDocument) => Boolean(doc.fileUrl),
+      );
+      const updatedSellRequest = await updateSellRequest(authToken, sellRequestId, {
+        photos: allPhotoUrls,
+        documents: [
+          ...existingDocuments,
+          ...uploadedDocs.map((doc, index) => ({
+            documentId: doc._id ?? doc.id,
+            name: doc.fileName ?? photoFileName(photos[index], index),
+            status: doc.status === 'uploaded' ? 'uploaded' : 'pending',
+            scanStatus: doc.scanStatus,
+            fileUrl: doc.url,
+          })),
+        ],
         draftStep: 4,
       });
-      go('sellAmenities', { ...ctx, photos: uploadedPhotoUrls, sellRequest, sellRequestId: sellRequestIdOf(sellRequest) });
+      go('sellAmenities', { ...ctx, photos: allPhotoUrls, sellRequest: updatedSellRequest, sellRequestId: sellRequestIdOf(updatedSellRequest) });
     } catch (e) {
       setError(apiMessage(e, 'Unable to save property photos.'));
     } finally {
@@ -428,6 +497,7 @@ export function SellPhotosScreen() {
     <Screen padBottom>
       <SellHeader step={4} back={back} title="Add Photos" />
       {!!error && <ErrorCard message={error} />}
+      {!sellRequestId && <ErrorCard message="Listing draft is missing. Go back and reopen this draft from My Listings." />}
       <View className="px-4 mt-4 gap-4">
         <View className="rounded-card border border-brand-100 bg-brand-50/50 p-3.5">
           <View className="flex-row items-start justify-between gap-3 mb-3">
@@ -436,15 +506,24 @@ export function SellPhotosScreen() {
               <Text className="text-[12px] text-ink-500 mt-0.5">Add at least {MIN} photos. The first one becomes your cover.</Text>
             </View>
             <View className="rounded-full bg-white px-3 py-1 border border-brand-100">
-              <Text className="text-[11px] font-bold text-brand-700">{photos.length} selected</Text>
+              <Text className="text-[11px] font-bold text-brand-700">{totalSelected} selected</Text>
             </View>
           </View>
 
           <View className="flex-row flex-wrap gap-2 mb-3">
-            {photos.map((photo, i) => (
-              <View key={photo.uri} style={{ width: '31%' }} className="aspect-square relative">
-                <Image source={{ uri: photo.uri }} className="rounded-card w-full h-full bg-ink-100" resizeMode="cover" />
+            {existingPhotos.map((photoUrl, i) => (
+              <View key={`existing-${i}`} style={{ width: '31%' }} className="aspect-square relative">
+                <Image source={{ uri: photoUrl }} className="rounded-card w-full h-full bg-ink-100" resizeMode="cover" />
                 {i === 0 && <View className="absolute top-1 left-1 bg-emerald-600 px-1.5 py-0.5 rounded"><Text className="text-white text-[9px] font-bold">COVER</Text></View>}
+                <Pressable onPress={() => removeExistingPhoto(photoUrl)} className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-rose-500 items-center justify-center">
+                  <Icon name="x" size={12} color="white" />
+                </Pressable>
+              </View>
+            ))}
+            {photos.map((photo, i) => (
+              <View key={`new-${i}-${photo.assetId ?? photo.uri}`} style={{ width: '31%' }} className="aspect-square relative">
+                <Image source={{ uri: photo.uri }} className="rounded-card w-full h-full bg-ink-100" resizeMode="cover" />
+                {existingPhotos.length === 0 && i === 0 && <View className="absolute top-1 left-1 bg-emerald-600 px-1.5 py-0.5 rounded"><Text className="text-white text-[9px] font-bold">COVER</Text></View>}
                 <Pressable onPress={() => removePhoto(photo.uri)} className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-rose-500 items-center justify-center">
                   <Icon name="x" size={12} color="white" />
                 </Pressable>
@@ -458,15 +537,16 @@ export function SellPhotosScreen() {
             </Pressable>
           </View>
 
-          {photos.length === 0 && (
+          {totalSelected === 0 && !loadingExisting && (
             <View className="rounded-card bg-white border border-ink-100 p-3 flex-row items-center gap-2">
               <Icon name="image-plus" size={16} color="#1A6FFF" />
               <Text className="text-[12px] text-ink-600 flex-1">No photos selected yet. Tap plus to choose photos from your media library.</Text>
             </View>
           )}
+          {loadingExisting && <LoadingBlock label="Loading saved photos..." />}
 
           <View className="mt-3 p-3 bg-white rounded-card flex-row items-center gap-2">
-            <Icon name="info" size={14} color="#64748B" /><Text className="text-[12px] text-ink-700">{photos.length}/{MIN} required photos</Text>
+            <Icon name="info" size={14} color="#64748B" /><Text className="text-[12px] text-ink-700">{totalSelected}/{MIN} required photos</Text>
           </View>
         </View>
 
@@ -476,8 +556,8 @@ export function SellPhotosScreen() {
         ))}
       </View>
       <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={photos.length < MIN || saving} className={`w-full h-12 rounded-xl items-center justify-center ${photos.length >= MIN && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
-          <Text className={`font-semibold text-[15px] ${photos.length >= MIN && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : `Continue (${photos.length}/${MIN} photos)`}</Text>
+        <Pressable onPress={saveAndContinue} disabled={totalSelected < MIN || saving || !sellRequestId} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${totalSelected >= MIN && !saving && sellRequestId ? 'bg-brand-600' : 'bg-ink-100'}`}>
+          <Text className={`font-semibold text-[15px] ${totalSelected >= MIN && !saving && sellRequestId ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : `Continue (${totalSelected}/${MIN} photos)`}</Text>
         </Pressable>
       </View>
     </Screen>
@@ -518,7 +598,7 @@ export function SellAmenitiesScreen() {
           {all.map((a) => (
             <Pressable key={a.label} onPress={() => toggle(a.label)} style={{ width: '31%' }} className={`p-2.5 rounded-card border items-center gap-1.5 ${sel.has(a.label) ? 'border-emerald-500 bg-emerald-50' : 'border-ink-200'}`}>
               <Icon name={a.icon} size={18} color={sel.has(a.label) ? '#059669' : '#94A3B8'} />
-              <Text className="text-[10px] text-center font-medium leading-tight">{a.label}</Text>
+              <Text className="text-[10px] text-center font-medium leading-caption">{a.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -903,7 +983,7 @@ export function SellChatScreen() {
         <Pressable onPress={requestCallback} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center"><Icon name="phone" size={14} color="#0F172A" /></Pressable>
       </View>
       {!!status && <View className="px-4 py-2 bg-brand-50"><Text className="text-[12px] text-brand-700">{status}</Text></View>}
-      {!!error && <View className="px-4 py-2 bg-rose-50"><Text className="text-[12px] text-rose-700" onPress={load}>{error}</Text></View>}
+      {!!error && <View className="px-4 py-2 bg-rose-50"><Text className="text-[12px] text-rose-700" onPress={() => load()}>{error}</Text></View>}
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -963,7 +1043,7 @@ export function SellChatScreen() {
               placeholderTextColor="#94A3B8"
               multiline
               className="text-[14px] text-ink-900"
-              style={{ minHeight: 24, maxHeight: 88, textAlignVertical: 'center', paddingVertical: 0 }}
+              style={{ minHeight: 24, maxHeight: 88, textAlignVertical: 'top', ...androidInputStyle(14) }}
             />
           </View>
           <Pressable

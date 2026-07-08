@@ -204,11 +204,83 @@ const PROPERTY_TYPE_LABELS: Record<string, string> = {
   interior: 'Interior',
 };
 
+/** Maps customer-app navigation slugs to backend property type keys. */
+export const PROPERTY_TYPE_SLUG_TO_BACKEND: Record<string, string> = {
+  plot: 'plot',
+  apartment: 'apartment',
+  residential: 'residential',
+  commercial: 'commercial',
+  villa: 'villa',
+  land: 'land',
+  fractional: 'fractional',
+  '3d-print': '3d_printing',
+  '3d-printing-home': '3d_printing',
+  organic: 'organic_home',
+  'organic-home': 'organic_home',
+  'ceo-mansion': 'ceo_mansion',
+  holiday: 'holiday_home',
+  'holiday-home': 'holiday_home',
+  farmhouse: 'farmhouse',
+  'farm-house': 'farmhouse',
+  nri: 'nri',
+  'nri-services': 'nri',
+  interior: 'interior',
+  'fractional-ownership': 'fractional',
+  'land-landbank': 'land',
+};
+
+const PROPERTY_TYPE_ALIASES: Record<string, string> = {
+  ...PROPERTY_TYPE_SLUG_TO_BACKEND,
+  plots: 'plot',
+  apartments: 'apartment',
+  flat: 'apartment',
+  flats: 'apartment',
+  villas: 'villa',
+  house: 'residential',
+  organic_home: 'organic_home',
+  'organic home': 'organic_home',
+  '3d_printing': '3d_printing',
+  '3d printing': '3d_printing',
+  '3d printing home': '3d_printing',
+  fractional_ownership: 'fractional',
+  'fractional ownership': 'fractional',
+  ceo_mansion: 'ceo_mansion',
+  ceo: 'ceo_mansion',
+  'ceo mansion': 'ceo_mansion',
+  holiday_home: 'holiday_home',
+  'holiday home': 'holiday_home',
+  farm: 'farmhouse',
+  'farm house': 'farmhouse',
+  'nri services': 'nri',
+  'land and landbank': 'land',
+  'land & landbank': 'land',
+};
+
+function normalizePropertyTypeToken(type: string) {
+  return type.trim().toLowerCase().replace(/&/g, 'and').replace(/[\s-]+/g, '_');
+}
+
+export function normalizePropertyTypeKey(type?: string | null): string | null {
+  const raw = String(type ?? '').trim();
+  if (!raw) return null;
+
+  const underscored = normalizePropertyTypeToken(raw);
+  if (underscored in PROPERTY_TYPE_LABELS) return underscored;
+
+  const aliased =
+    PROPERTY_TYPE_ALIASES[underscored] ??
+    PROPERTY_TYPE_ALIASES[raw.toLowerCase()] ??
+    PROPERTY_TYPE_ALIASES[normalizePropertyTypeToken(raw.replace(/_/g, ' '))];
+  return aliased ?? null;
+}
+
 export function formatPropertyTypeLabel(type?: string | null): string {
+  const canonical = normalizePropertyTypeKey(type);
+  if (canonical) return PROPERTY_TYPE_LABELS[canonical] ?? canonical;
+
   const normalized = String(type || '').trim();
   if (!normalized) return 'Property';
-  const key = normalized.toLowerCase();
-  return PROPERTY_TYPE_LABELS[key] ?? key
+  return normalized
     .split(/[_\s-]+/)
     .filter(Boolean)
     .map((part) => part.toUpperCase() === 'NRI' ? 'NRI' : part.charAt(0).toUpperCase() + part.slice(1))

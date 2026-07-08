@@ -1,4 +1,6 @@
-import { CommonActions, useNavigation, useRoute } from '@react-navigation/native';
+import { useCallback } from 'react';
+import { BackHandler } from 'react-native';
+import { CommonActions, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 
 const TAB_TARGETS: Record<string, { tab: string; screen: string }> = {
   home: { tab: 'HomeTab', screen: 'home' },
@@ -6,6 +8,31 @@ const TAB_TARGETS: Record<string, { tab: string; screen: string }> = {
   sellTypes: { tab: 'SellTab', screen: 'sellTypes' },
   profile: { tab: 'ProfileTab', screen: 'profile' },
 };
+
+const TAB_STACK_ROOTS: Record<string, string> = {
+  HomeTab: 'home',
+  BuyTab: 'buyTypes',
+  SellTab: 'sellTypes',
+  ProfileTab: 'profile',
+};
+
+const MAIN_TAB_NAMES = Object.keys(TAB_STACK_ROOTS);
+
+function buildMainTabsResetState(activeTab: string, activeScreen: string, nextCtx: any = {}) {
+  return {
+    index: Math.max(0, MAIN_TAB_NAMES.indexOf(activeTab)),
+    routes: MAIN_TAB_NAMES.map((tab) => ({
+      name: tab,
+      state: {
+        index: 0,
+        routes: [{
+          name: tab === activeTab ? activeScreen : TAB_STACK_ROOTS[tab],
+          ...(tab === activeTab ? { params: { ctx: nextCtx } } : {}),
+        }],
+      },
+    })),
+  };
+}
 
 const TAB_BY_ID: Record<string, { tab: string; screen: string }> = {
   home: TAB_TARGETS.home,
@@ -84,12 +111,18 @@ export function useNav<T = any>() {
         index: 0,
         routes: [{
           name: 'MainTabs',
-          params: { screen: target.tab, params: { screen: target.screen, params: { ctx: nextCtx } } },
+          state: buildMainTabsResetState(target.tab, target.screen, nextCtx),
         }],
       }));
       return;
     }
     root.dispatch(CommonActions.reset({
+      index: 0,
+      routes: [{ name: screen, params: { ctx: nextCtx } }],
+    }));
+  };
+  const completeTo = (screen: string, nextCtx: any = {}) => {
+    navigation.dispatch(CommonActions.reset({
       index: 0,
       routes: [{ name: screen, params: { ctx: nextCtx } }],
     }));
@@ -108,5 +141,22 @@ export function useNav<T = any>() {
     switchTab(tab);
   };
 
-  return { go, back, jump, resetTo, onNav, ctx, navigation };
+  return { go, back, jump, resetTo, completeTo, onNav, ctx, navigation };
+}
+
+export function useFlowCompletionBack(options?: { redirectToHome?: boolean }) {
+  const { resetTo, navigation } = useNav();
+  const redirectToHome = options?.redirectToHome ?? true;
+
+  useFocusEffect(
+    useCallback(() => {
+      navigation.setOptions({ gestureEnabled: false });
+      const onBack = () => {
+        if (redirectToHome) resetTo('home');
+        return true;
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+      return () => sub.remove();
+    }, [navigation, redirectToHome, resetTo]),
+  );
 }

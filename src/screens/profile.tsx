@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Image, View, Text, Pressable, Linking } from 'react-native';
+import { Image, View, Text, Pressable } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Icon from '../components/Icon';
+import { BrandLogo } from '../components/BrandLogo';
 import { Screen, TopBar, Field, Input, Badge, PhotoPlaceholder, Sheet, UserAvatar, FadeInView, EmptyState } from '../components/shared';
 import { formatINR } from '../data/data';
 import { useNav } from '../navigation/useNav';
+import { navigateFromNotification } from '../navigation/navigationRef';
 import { useAppState } from '../state/AppState';
 import {
   BuyEnquiry,
@@ -15,6 +17,8 @@ import {
   getFavoriteProperties,
   listCustomerNotifications,
   markCustomerNotificationsRead,
+  markCustomerNotificationRead,
+  deleteCustomerNotification,
   listBuyEnquiries,
   listCustomerProperties,
   listSellRequests,
@@ -226,11 +230,11 @@ export function ProfileScreen() {
                 await signOut();
                 resetTo('login');
               }}
-              className="w-full h-12 rounded-xl items-center justify-center bg-rose-600"
+              className="w-full min-h-12 py-3 rounded-xl items-center justify-center bg-rose-600"
             >
               <Text className="text-white font-semibold text-[15px]">Yes, Logout</Text>
             </Pressable>
-            <Pressable onPress={() => setShowLogout(false)} className="w-full h-12 rounded-xl items-center justify-center border border-ink-200"><Text className="text-ink-700 font-semibold text-[15px]">Cancel</Text></Pressable>
+            <Pressable onPress={() => setShowLogout(false)} className="w-full min-h-12 py-3 rounded-xl items-center justify-center border border-ink-200"><Text className="text-ink-700 font-semibold text-[15px]">Cancel</Text></Pressable>
           </View>
         </Sheet>
       )}
@@ -317,7 +321,7 @@ export function ProfileEditScreen() {
       const uploaded = await uploadCustomerDocument(authToken, {
         ownerType: 'user',
         ownerId: userId,
-        purpose: 'kyc',
+        purpose: 'property_media',
         documentType: 'profile_photo',
         file: {
           uri: asset.uri,
@@ -363,17 +367,17 @@ export function ProfileEditScreen() {
         <View className="gap-4">
           <Field label="Full Name" required><Input icon="user" value={name} onChangeText={setName} /></Field>
           <Field label="Phone Number" hint="Verified — cannot be changed">
-            <View className="flex-row items-center gap-2 h-12 px-3 bg-ink-100 border border-ink-200 rounded-card">
+            <View className="flex-row items-center gap-2 min-h-12 py-2.5 px-3 bg-ink-100 border border-ink-200 rounded-card">
               <Icon name="phone" size={16} color="#94A3B8" /><Text className="flex-1 text-[14px] text-ink-700">{phone}</Text><Icon name="lock" size={14} color="#94A3B8" />
             </View>
           </Field>
           <Field label="Email Address"><Input icon="mail" value={email} onChangeText={setEmail} /></Field>
         </View>
         {!!error && <View className="mt-4"><InlineError message={error} /></View>}
-        <Pressable onPress={save} disabled={saving} className={`w-full h-12 mt-6 rounded-xl items-center justify-center ${saved ? 'bg-emerald-500' : 'bg-brand-600'} ${saving ? 'opacity-70' : ''}`}>
+        <Pressable onPress={save} disabled={saving} className={`w-full min-h-12 py-3 mt-6 rounded-xl items-center justify-center ${saved ? 'bg-emerald-500' : 'bg-brand-600'} ${saving ? 'opacity-70' : ''}`}>
           <Text className="text-white font-semibold text-[15px]">{saving ? 'Saving...' : saved ? 'Saved!' : 'Save Changes'}</Text>
         </Pressable>
-        <Pressable onPress={() => go('changePhone')} className="w-full h-11 mt-3 rounded-xl items-center justify-center bg-ink-50">
+        <Pressable onPress={() => go('changePhone')} className="w-full min-h-11 py-2.5 mt-3 rounded-xl items-center justify-center bg-ink-50">
           <Text className="text-brand-600 font-semibold text-[13px]">Change Phone Number</Text>
         </Pressable>
       </View>
@@ -384,7 +388,7 @@ export function ProfileEditScreen() {
 // ─── G-01 Notifications ──────────────────────────────────────
 export function NotificationsScreen() {
   const { back } = useNav();
-  const { authToken, getCachedValue, setCachedValue } = useAppState();
+  const { authToken, getCachedValue, setCachedValue, clearCachedValue } = useAppState();
   const [notifications, setNotifications] = useState<CustomerNotification[]>([]);
   const [locallyRead, setLocallyRead] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -436,6 +440,48 @@ export function NotificationsScreen() {
     return acc;
   }, {});
 
+  const openNotification = async (notification: CustomerNotification) => {
+    if (notification.unread && authToken) {
+      setLocallyRead((prev) => new Set(prev).add(notification.id));
+      try {
+        await markCustomerNotificationRead(authToken, notification.id);
+        clearCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`);
+        clearCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`);
+      } catch {
+        // Continue navigation even if read sync fails.
+      }
+    }
+    navigateFromNotification({
+      type: notification.notificationType || notification.event,
+      notificationType: notification.notificationType || notification.event,
+      screen: notification.screen || undefined,
+      screenKey: notification.screenKey || notification.deepLink || undefined,
+      deepLink: notification.deepLink || notification.screenKey || undefined,
+      listingId: notification.listingId || undefined,
+      enquiryId: notification.enquiryId || undefined,
+      dealId: notification.dealId || undefined,
+      propertyId: notification.propertyId || undefined,
+      entityId: notification.entityId || undefined,
+      entityType: notification.entityType || undefined,
+      image: notification.image || undefined,
+      createdAt: notification.createdAt || undefined,
+      notificationId: notification.id,
+    });
+  };
+
+  const removeNotification = async (notificationId: string) => {
+    setNotifications((prev) => prev.filter((item) => item.id !== notificationId));
+    if (!authToken) return;
+    try {
+      await deleteCustomerNotification(authToken, notificationId);
+      clearCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`);
+      clearCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`);
+    } catch {
+      setError('Could not delete notification. Pull to refresh and try again.');
+      loadNotifications(true);
+    }
+  };
+
   const markAllRead = async () => {
     const ids = notifications.filter((notification) => notification.unread).map((notification) => notification.id);
     setLocallyRead(new Set(notifications.map((notification) => notification.id)));
@@ -482,15 +528,22 @@ export function NotificationsScreen() {
                 const unread = it.unread && !locallyRead.has(it.id);
                 return (
                 <FadeInView key={it.id} className={`p-3 rounded-card border flex-row gap-3 ${unread ? 'border-brand-200 bg-brand-50/40' : 'border-ink-200'}`}>
-                  <View className="w-9 h-9 rounded-full bg-brand-50 items-center justify-center"><Icon name={iconFor(it)} size={16} color="#1A6FFF" /></View>
-                  <View className="flex-1">
-                    <View className="flex-row items-start justify-between gap-2">
-                      <Text className="text-[13px] font-semibold flex-1">{it.title}</Text>
-                      {unread && <View className="w-2 h-2 rounded-full bg-brand-600 mt-1.5" />}
+                  <Pressable onPress={() => openNotification(it)} className="flex-row gap-3 flex-1">
+                    <View className="w-9 h-9 rounded-full bg-brand-50 items-center justify-center"><Icon name={iconFor(it)} size={16} color="#1A6FFF" /></View>
+                    <View className="flex-1">
+                      <View className="flex-row items-start justify-between gap-2">
+                        <Text className="text-[13px] font-semibold flex-1">{it.title}</Text>
+                        {unread && <View className="w-2 h-2 rounded-full bg-brand-600 mt-1.5" />}
+                      </View>
+                      <Text className="text-[11.5px] text-ink-500 mt-0.5">{it.body}</Text>
                     </View>
-                    <Text className="text-[11.5px] text-ink-500 mt-0.5">{it.body}</Text>
+                  </Pressable>
+                  <View className="items-end justify-between">
+                    <Text className="text-[10.5px] text-ink-400">{timeLabel(it.createdAt)}</Text>
+                    <Pressable onPress={() => removeNotification(it.id)} hitSlop={8}>
+                      <Text className="text-[10px] text-ink-400">Delete</Text>
+                    </Pressable>
                   </View>
-                  <Text className="text-[10.5px] text-ink-400">{timeLabel(it.createdAt)}</Text>
                 </FadeInView>
               )})}
             </View>
@@ -576,7 +629,7 @@ export function NewsInsightsScreen() {
               <View className="absolute top-2 left-2"><Badge color="brand">{a.category || a.excerpt || 'News'}</Badge></View>
             </PhotoPlaceholder>
             <View className="p-3">
-              <Text className="text-[14px] font-semibold text-ink-900 leading-snug mb-2">{a.title}</Text>
+              <Text className="text-[14px] font-semibold text-ink-900 leading-display-tight mb-2">{a.title}</Text>
               {!!a.body && <Text className="text-[12px] text-ink-500 mb-2" numberOfLines={2}>{a.body}</Text>}
               <View className="flex-row items-center gap-3"><Text className="text-[11px] text-ink-500">{contentMetaString(a, 'publishedLabel', a.publishedAt ? new Date(a.publishedAt).toLocaleDateString('en-IN') : 'Recently')}</Text><Text className="text-[11px] text-ink-500">{contentMetaString(a, 'readTime', '4 min')} read</Text></View>
             </View>
@@ -594,19 +647,19 @@ export function GeneralInfoScreen() {
     { icon: 'building-2', title: about.title, sub: about.excerpt || "India's verified real estate marketplace", target: 'aboutUs' },
     { icon: 'shield', title: 'Privacy Policy', sub: 'How we use and protect your data', target: 'privacyPolicy' },
     { icon: 'file-text', title: 'Terms of Service', sub: 'User agreement and marketplace rules', target: 'termsOfUse' },
-    { icon: 'star', title: 'Rate the App', sub: 'Share your experience on the App Store' },
+    { icon: 'star', title: 'Rate the App', sub: 'Share your experience on the App Store', target: 'rateApp' },
   ];
   return (
     <Screen>
       <TopBar onBack={back} title="General Info" sub="About Builtglory" />
       <View className="px-4">
         <View className="flex-row items-center gap-3 p-4 bg-ink-50 rounded-card mb-4">
-          <View className="w-12 h-12 rounded-xl bg-brand-600 items-center justify-center"><Text className="text-white font-black text-xl">B</Text></View>
+          <BrandLogo size={48} />
           <View><Text className="text-[15px] font-bold text-ink-900">BUILTGLORY</Text><Text className="text-[11px] text-ink-500">Version {contentMetaString(about, 'version', '1.0.0')} · India</Text></View>
         </View>
         <View className="rounded-card border border-ink-200">
           {sections.map((s, i) => (
-            <Pressable key={s.title} onPress={() => s.target ? go(s.target) : s.title === 'Rate the App' ? Linking.openURL('https://apps.apple.com') : undefined} className={`flex-row items-center gap-3 p-4 ${i ? 'border-t border-ink-100' : ''}`}>
+            <Pressable key={s.title} onPress={() => s.target && go(s.target)} className={`flex-row items-center gap-3 p-4 ${i ? 'border-t border-ink-100' : ''}`}>
               <View className="w-10 h-10 rounded-full bg-ink-100 items-center justify-center"><Icon name={s.icon} size={18} color="#64748B" /></View>
               <View className="flex-1"><Text className="text-[14px] font-semibold text-ink-900">{s.title}</Text><Text className="text-[11.5px] text-ink-500">{s.sub}</Text></View>
               <Icon name="chevron-right" size={16} color="#94A3B8" />
@@ -749,12 +802,12 @@ export function HelpFeedbackScreen() {
         ) : (
           <>
             <Input multiline placeholder="Tell us what's on your mind…" value={feedback} onChangeText={setFeedback} />
-            <Pressable onPress={submitFeedback} disabled={!feedback.trim() || submitting} className={`w-full h-12 rounded-xl items-center justify-center ${feedback.trim() && !submitting ? 'bg-brand-600' : 'bg-ink-100'}`}>
+            <Pressable onPress={submitFeedback} disabled={!feedback.trim() || submitting} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${feedback.trim() && !submitting ? 'bg-brand-600' : 'bg-ink-100'}`}>
               <Text className={`font-semibold text-[15px] ${feedback.trim() && !submitting ? 'text-white' : 'text-ink-400'}`}>{submitting ? 'Submitting...' : 'Submit Feedback'}</Text>
             </Pressable>
           </>
         )}
-        <Pressable onPress={requestCallback} disabled={submitting || callbackRequested} className={`w-full h-11 rounded-xl items-center justify-center border ${callbackRequested ? 'border-emerald-200 bg-emerald-50' : 'border-ink-200 bg-white'}`}>
+        <Pressable onPress={requestCallback} disabled={submitting || callbackRequested} className={`w-full min-h-11 py-2.5 rounded-xl items-center justify-center border ${callbackRequested ? 'border-emerald-200 bg-emerald-50' : 'border-ink-200 bg-white'}`}>
           <Text className={`font-semibold text-[13px] ${callbackRequested ? 'text-emerald-700' : 'text-brand-600'}`}>{callbackRequested ? 'Callback requested' : 'Request support callback'}</Text>
         </Pressable>
       </View>

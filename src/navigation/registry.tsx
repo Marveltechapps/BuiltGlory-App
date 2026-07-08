@@ -130,6 +130,7 @@ export const SCREEN_GROUPS: { group: string; items: { key: string; label: string
       { key: 'customerSupport', label: 'Customer Support', Comp: Settings.CustomerSupportScreen },
       { key: 'callUs', label: 'Call Us', Comp: Settings.CallUsScreen },
       { key: 'aboutUs', label: 'About Us', Comp: SettingsMissing.AboutUsScreen },
+      { key: 'rateApp', label: 'Rate the App', Comp: SettingsMissing.RateAppScreen },
     ],
   },
   {

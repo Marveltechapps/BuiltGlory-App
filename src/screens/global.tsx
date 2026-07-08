@@ -60,7 +60,7 @@ export function OfflineScreen() {
       <View className="w-24 h-24 rounded-full bg-ink-100 items-center justify-center mb-5"><Icon name="wifi-off" size={44} color="#94A3B8" /></View>
       <Text className="text-[20px] font-bold text-ink-900 text-center">No internet connection</Text>
       <Text className="text-[13px] text-ink-500 mt-2 max-w-[240px] leading-relaxed text-center">Please check your network and try again.</Text>
-      <Pressable onPress={retry} disabled={retrying} className="flex-row items-center justify-center gap-2 h-12 px-8 mt-6 rounded-xl bg-brand-600">
+      <Pressable onPress={retry} disabled={retrying} className="flex-row items-center justify-center gap-2 min-h-12 py-3 px-8 mt-6 rounded-xl bg-brand-600">
         {retrying && <Spinner color="white" />}
         <Text className="text-white font-semibold text-[15px]">{retrying ? 'Retrying…' : 'Retry'}</Text>
       </Pressable>
@@ -90,7 +90,7 @@ export function ForceUpdateScreen() {
       <View className="w-24 h-24 rounded-3xl bg-brand-600 items-center justify-center mb-5"><Icon name="arrow-up-circle" size={48} color="white" strokeWidth={1.5} /></View>
       <Text className="text-[20px] font-bold text-ink-900 text-center">Update required</Text>
       <Text className="text-[13px] text-ink-500 mt-2 max-w-[260px] leading-relaxed text-center">A new version of Builtglory is available. Please update to continue.</Text>
-      <Pressable onPress={openStore} className="flex-row items-center justify-center gap-2 h-12 px-8 mt-6 rounded-xl bg-brand-600">
+      <Pressable onPress={openStore} className="flex-row items-center justify-center gap-2 min-h-12 py-3 px-8 mt-6 rounded-xl bg-brand-600">
         <Icon name="download" size={17} color="white" /><Text className="text-white font-semibold text-[15px]">Update Now</Text>
       </Pressable>
       <Text className="text-[11px] text-ink-400 mt-3">Current {currentVersion} · Required {requiredVersion} · Latest {latestVersion}</Text>
@@ -157,7 +157,7 @@ export function SessionExpiryScreen() {
       <Text className="text-[13px] text-ink-500 mt-2 max-w-[250px] leading-relaxed text-center">Your session has expired. Please log in again.</Text>
       <View className="mt-4 px-3 py-1.5 rounded-full bg-emerald-50 flex-row items-center gap-1.5"><Icon name="shield-check" size={13} color="#10B981" /><Text className="text-[11.5px] text-emerald-700 font-medium">Your data is safe</Text></View>
       {!!message && <Text className="text-[12px] text-rose-600 mt-3 text-center">{message}</Text>}
-      <Pressable onPress={retrySession} disabled={checking} className="flex-row items-center justify-center gap-2 h-12 px-8 mt-5 rounded-xl bg-brand-600">
+      <Pressable onPress={retrySession} disabled={checking} className="flex-row items-center justify-center gap-2 min-h-12 py-3 px-8 mt-5 rounded-xl bg-brand-600">
         {checking ? <Spinner color="white" /> : <Icon name="refresh-cw" size={17} color="white" />}
         <Text className="text-white font-semibold text-[15px]">{checking ? 'Checking...' : 'Try Refresh'}</Text>
       </Pressable>

@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
-import { CUSTOMER_API_BASE_URL, SellerActivity, SupportTicket } from '../api/customer';
+import { SellerActivity, SupportTicket } from '../api/customer';
+import { getChatServerOrigin } from '../config/api';
 
 type Ack<T> = { ok: true } & T | { ok: false; error?: string };
 
@@ -17,14 +18,8 @@ type ClientToServerEvents = {
 
 export type ChatSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-function chatServerUrl() {
-  return CUSTOMER_API_BASE_URL
-    .replace(/\/api\/v1\/?$/, '')
-    .replace(/\/api\/?$/, '');
-}
-
 export function createChatSocket(accessToken: string): ChatSocket {
-  return io(`${chatServerUrl()}/chat`, {
+  return io(`${getChatServerOrigin()}/chat`, {
     auth: { token: accessToken },
     transports: ['websocket'],
     reconnection: true,

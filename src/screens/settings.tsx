@@ -269,7 +269,7 @@ export function AppSettingsScreen() {
           <Text className={`text-[12px] font-semibold uppercase tracking-wider mb-2 ${dark ? 'text-white/50' : 'text-ink-500'}`}>Language</Text>
           <View className="flex-row gap-2">
             {(['English', 'Tamil'] as const).map((l) => (
-              <Pressable key={l} onPress={() => update({ ...prefs, language: l })} className={`flex-1 h-12 rounded-card border items-center justify-center ${prefs.language === l ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
+              <Pressable key={l} onPress={() => update({ ...prefs, language: l })} className={`flex-1 min-h-12 py-3 rounded-card border items-center justify-center ${prefs.language === l ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
                 <Text className={`text-[14px] font-medium ${prefs.language === l ? 'text-brand-700' : dark ? 'text-white/70' : 'text-ink-700'}`}>{l}</Text>
               </Pressable>
             ))}
@@ -425,7 +425,7 @@ export function AccountDeletionScreen() {
             <Text className="text-[11.5px] text-amber-800 mt-1">Verification: {status.verificationStatus || 'not_started'}</Text>
             {scheduledAt && <Text className="text-[11.5px] text-amber-800 mt-1">Grace period ends: {scheduledAt}</Text>}
             {activeRequest && (
-              <Pressable onPress={cancel} disabled={saving} className="mt-3 h-10 rounded-xl bg-white border border-amber-300 items-center justify-center">
+              <Pressable onPress={cancel} disabled={saving} className="mt-3 min-h-10 py-2 rounded-xl bg-white border border-amber-300 items-center justify-center">
                 <Text className="text-[13px] font-semibold text-amber-800">{saving ? 'Cancelling...' : 'Cancel Deletion Request'}</Text>
               </Pressable>
             )}
@@ -437,10 +437,10 @@ export function AccountDeletionScreen() {
         </View>
         <Field label="Reason (optional)"><Input value={reason} onChangeText={setReason} placeholder="Tell us why you are leaving" multiline /></Field>
         <Field label="Type DELETE to confirm"><Input value={typed} onChangeText={setTyped} placeholder="DELETE" /></Field>
-        <Pressable onPress={submit} disabled={!enabled || !authToken || saving || activeRequest} className={`w-full h-12 mt-5 rounded-xl items-center justify-center ${enabled && authToken && !saving && !activeRequest ? 'bg-rose-600' : 'bg-rose-200'}`}>
+        <Pressable onPress={submit} disabled={!enabled || !authToken || saving || activeRequest} className={`w-full min-h-12 py-3 mt-5 rounded-xl items-center justify-center ${enabled && authToken && !saving && !activeRequest ? 'bg-rose-600' : 'bg-rose-200'}`}>
           <Text className="text-white font-semibold text-[15px]">{saving ? 'Submitting...' : activeRequest ? 'Deletion Already Requested' : 'Request Account Deletion'}</Text>
         </Pressable>
-        <Pressable onPress={back} className="w-full h-12 mt-2 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Keep My Account</Text></Pressable>
+        <Pressable onPress={back} className="w-full min-h-12 py-3 mt-2 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Keep My Account</Text></Pressable>
       </View>
     </Screen>
   );
@@ -622,7 +622,7 @@ export function CustomerSupportScreen() {
             <Field label="Preferred time slot">
               <View className="flex-row gap-2">
                 {['Morning', 'Afternoon', 'Evening'].map((s) => (
-                  <Pressable key={s} onPress={() => setForm({ ...form, slot: s })} className={`flex-1 h-10 rounded-card items-center justify-center ${form.slot === s ? 'bg-brand-600' : 'bg-ink-100'}`}>
+                  <Pressable key={s} onPress={() => setForm({ ...form, slot: s })} className={`flex-1 min-h-10 py-2 rounded-card items-center justify-center ${form.slot === s ? 'bg-brand-600' : 'bg-ink-100'}`}>
                     <Text className={`text-[12px] font-medium ${form.slot === s ? 'text-white' : 'text-ink-700'}`}>{s}</Text>
                   </Pressable>
                 ))}

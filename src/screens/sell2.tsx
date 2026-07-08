@@ -4,7 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import Icon from '../components/Icon';
 import { Screen, TopBar, Field, Input, Btn, DocCard, Toast, useToast, Sheet, SuccessBurst, FadeInView } from '../components/shared';
 import { formatINR } from '../data/data';
-import { useNav } from '../navigation/useNav';
+import { useFlowCompletionBack, useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
 import {
   getSellRequest,
@@ -14,7 +14,7 @@ import {
   updateSellRequest,
   uploadCustomerDocument,
 } from '../api/customer';
-import { ctxSellRequestId, sellRequestIdOf, sellRequestTitle, useSellerActivityContext } from './sell';
+import { ctxSellRequestId, sellDraftResumeContext, sellRequestIdOf, sellRequestTitle, useSellerActivityContext } from './sell';
 
 function apiMessage(error: unknown, fallback = 'Something went wrong. Please try again.') {
   return error instanceof Error ? error.message : fallback;
@@ -46,7 +46,7 @@ function useSellRequestContext(ctx: any) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const sellRequestId = ctxSellRequestId(ctx);
-  const load = async () => {
+  const load = async (force = false) => {
     if (!authToken || !sellRequestId) return;
     setLoading(true);
     setError('');
@@ -57,14 +57,19 @@ function useSellRequestContext(ctx: any) {
     } finally {
       setLoading(false);
     }
+    if (force && __DEV__) {
+      console.log('Sell request refreshed from notification context');
+    }
   };
-  useEffect(() => { load(); }, [authToken, sellRequestId]);
+  useEffect(() => {
+    load(Boolean(ctx?.refresh));
+  }, [authToken, sellRequestId, ctx?.refresh]);
   return { authToken, request, setRequest, loading, error, load, sellRequestId };
 }
 
 // ─── SL-09 Edit Listing ──────────────────────────────────────
 export function EditListingScreen() {
-  const { go, back, ctx } = useNav();
+  const { go, completeTo, back, ctx } = useNav();
   const { authToken, request, setRequest, error, load, sellRequestId } = useSellRequestContext(ctx);
   const src: any = request || ctx?.p || {};
   const [data, setData] = useState({
@@ -114,13 +119,20 @@ export function EditListingScreen() {
         propertyTitle: data.title,
         askingPrice: data.price ? Number(data.price) : undefined,
         specifications: { ...(request?.specifications ?? {}), builtUpArea: data.area ? Number(data.area) : undefined, floor: data.floor },
-        isDraft: true,
+        draftStep: request?.draftStep ?? 7,
       });
       setRequest(updated);
-      go('draftSuccess', { data, sellRequest: updated, sellRequestId: sellRequestIdOf(updated) });
+      completeTo('draftSuccess', { data, sellRequest: updated, sellRequestId: sellRequestIdOf(updated) });
     } catch (e) {
       fire(apiMessage(e, 'Unable to save draft.'));
     }
+  };
+  const openPhotos = () => {
+    if (!request) {
+      fire('Listing details are still loading.');
+      return;
+    }
+    go('sellPhotos', sellDraftResumeContext(request));
   };
   return (
     <Screen padBottom>
@@ -137,7 +149,7 @@ export function EditListingScreen() {
             <View className="flex-1"><Field label="Built-up Area"><Input keyboardType="numeric" value={data.area} onChangeText={(v) => setData({ ...data, area: v })} /></Field></View>
             <View className="flex-1"><Field label="Floor"><Input keyboardType="numeric" value={data.floor} onChangeText={(v) => setData({ ...data, floor: v })} /></Field></View>
           </View>
-          <Pressable onPress={() => go('sellPhotos')} className="w-full flex-row items-center justify-between p-3.5 rounded-card border border-ink-200">
+          <Pressable onPress={openPhotos} className="w-full flex-row items-center justify-between p-3.5 rounded-card border border-ink-200">
             <Text className="text-[13px] font-semibold">Photos & Amenities</Text>
             <Icon name="chevron-right" size={16} color="#94A3B8" />
           </Pressable>
@@ -145,10 +157,10 @@ export function EditListingScreen() {
       </View>
       <Toast message={msg} />
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200 gap-2">
-        <Pressable onPress={save} className={`w-full h-12 rounded-xl items-center justify-center flex-row gap-2 ${saved ? 'bg-emerald-500' : 'bg-brand-600'}`}>
+        <Pressable onPress={save} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center flex-row gap-2 ${saved ? 'bg-emerald-500' : 'bg-brand-600'}`}>
           <Text className="text-white font-semibold text-[15px]">{saved ? 'Saved!' : 'Save Changes'}</Text>
         </Pressable>
-        <Pressable onPress={saveDraft} className="w-full h-12 rounded-xl items-center justify-center border border-ink-200">
+        <Pressable onPress={saveDraft} className="w-full min-h-12 py-3 rounded-xl items-center justify-center border border-ink-200">
           <Text className="text-ink-700 font-semibold text-[15px]">Save as Draft</Text>
         </Pressable>
       </View>
@@ -158,7 +170,8 @@ export function EditListingScreen() {
 
 // ─── SL-08a Draft Save Success ───────────────────────────────
 export function DraftSuccessScreen() {
-  const { go, ctx } = useNav();
+  const { go, resetTo, ctx } = useNav();
+  useFlowCompletionBack();
   const draftData = ctx?.sellRequest || ctx?.data || {};
   return (
     <Screen fill>
@@ -181,7 +194,7 @@ export function DraftSuccessScreen() {
         )}
         <View className="mt-6 flex-row gap-2 w-full">
           <Btn variant="outline" className="flex-1" onPress={() => go('myListings')}>My Listings</Btn>
-          <Btn className="flex-1" onPress={() => go('home')}>Home</Btn>
+          <Btn className="flex-1" onPress={() => resetTo('home')}>Home</Btn>
         </View>
       </View>
     </Screen>
@@ -339,7 +352,7 @@ export function ReuploadScreen() {
               reason={f.reason}
               action={
                 <View className="px-3 pb-3">
-                  <Pressable onPress={() => pickDocument(f)} disabled={saving} className="w-full h-10 rounded-card bg-brand-50 items-center justify-center flex-row gap-2">
+                  <Pressable onPress={() => pickDocument(f)} disabled={saving} className="w-full min-h-10 py-2 rounded-card bg-brand-50 items-center justify-center flex-row gap-2">
                     <Text className="font-semibold text-[13px] text-brand-700">{uploadedDocs[f.id] ? 'Replace upload' : 'Upload document'}</Text>
                   </Pressable>
                 </View>
@@ -349,7 +362,7 @@ export function ReuploadScreen() {
         </View>
       </View>
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={submit} disabled={!allDone || saving} className={`w-full h-12 rounded-xl items-center justify-center ${allDone && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={submit} disabled={!allDone || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${allDone && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${allDone && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Submitting...' : 'Submit for Re-verification'}</Text>
         </Pressable>
       </View>
@@ -388,7 +401,7 @@ export function OfferScreen() {
       <View className="px-4">
         <View className="rounded-card border-2 border-brand-600 p-5 items-center mb-4">
           <Text className="text-[12px] text-ink-500 uppercase tracking-wider">Our offer for your property</Text>
-          <Text className="text-[40px] font-bold text-brand-600 leading-tight mt-1">{offerAmount ? formatINR(offerAmount) : 'Pending'}</Text>
+          <Text className="text-[40px] font-bold text-brand-600 leading-display mt-1">{offerAmount ? formatINR(offerAmount) : 'Pending'}</Text>
           <View className="flex-row items-center gap-1 bg-emerald-50 px-2 py-1 rounded-full mt-2">
             <Icon name="trending-up" size={12} color="#10B981" /><Text className="text-[11.5px] text-emerald-700">{activity?.offer?.status ?? request?.status ?? 'pending'} status</Text>
           </View>
@@ -398,7 +411,7 @@ export function OfferScreen() {
           <View className="flex-row justify-center gap-2">
             {[[hh, 'hrs'], [mm, 'min'], [ss, 'sec']].map(([v, l]) => (
               <View key={l as string} className="bg-white/10 rounded-md px-3 py-2 items-center" style={{ minWidth: 56 }}>
-                <Text className="text-white text-[22px] font-bold leading-none">{String(v).padStart(2, '0')}</Text>
+                <Text className="text-white text-[22px] font-bold leading-display">{String(v).padStart(2, '0')}</Text>
                 <Text className="text-white/60 text-[9px] mt-1">{l}</Text>
               </View>
             ))}
@@ -408,7 +421,7 @@ export function OfferScreen() {
       </View>
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200 flex-row gap-2">
         <Btn variant="outline" className="flex-1" disabled={!offerAmount} onPress={() => go('acceptNegotiate', { mode: 'negotiate', sellRequest: request, sellRequestId, sellerActivity: activity, offerAmount })}>Negotiate</Btn>
-        <Pressable disabled={!offerAmount} onPress={() => go('acceptNegotiate', { mode: 'accept', sellRequest: request, sellRequestId, sellerActivity: activity, offerAmount })} className={`flex-1 h-[52px] rounded-card items-center justify-center ${offerAmount ? 'bg-emerald-600' : 'bg-ink-100'}`}>
+        <Pressable disabled={!offerAmount} onPress={() => go('acceptNegotiate', { mode: 'accept', sellRequest: request, sellRequestId, sellerActivity: activity, offerAmount })} className={`flex-1 min-h-[52px] py-3.5 rounded-card items-center justify-center ${offerAmount ? 'bg-emerald-600' : 'bg-ink-100'}`}>
           <Text className="text-white font-semibold text-[15px]">Accept Offer</Text>
         </Pressable>
       </View>
@@ -471,7 +484,7 @@ export function AcceptNegotiateScreen() {
             <Text className="text-[13px] text-ink-500 mb-5">You're accepting {formatINR(offerAmount)} for {sellRequestTitle(ctx?.sellRequest)}. We'll proceed to deal confirmation.</Text>
             <View className="gap-2">
               <Btn className="w-full" disabled={saving} onPress={() => requestNegotiationCallback('accept')}>{saving ? 'Accepting...' : 'Yes, Accept Offer'}</Btn>
-              <Pressable onPress={() => setConfirm(false)} className="w-full h-12 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Go Back</Text></Pressable>
+              <Pressable onPress={() => setConfirm(false)} className="w-full min-h-12 py-3 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Go Back</Text></Pressable>
             </View>
           </Sheet>
         )}
@@ -515,7 +528,7 @@ export function AcceptNegotiateScreen() {
         <Field label="Notes (optional)"><Input multiline placeholder="Add a note to support your counter offer…" value={notes} onChangeText={setNotes} /></Field>
       </View>
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={() => counter && requestNegotiationCallback('negotiate')} disabled={!counter || saving} className={`w-full h-12 rounded-xl items-center justify-center ${counter && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={() => counter && requestNegotiationCallback('negotiate')} disabled={!counter || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${counter && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${counter && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Submitting...' : 'Submit Counter Offer'}</Text>
         </Pressable>
       </View>
@@ -595,7 +608,7 @@ export function DealConfirmedScreen() {
         </View>
       </View>
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={saveBankDetails} disabled={!(confirmedDeal && valid) || saving} className={`w-full h-12 rounded-xl items-center justify-center ${confirmedDeal && valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={saveBankDetails} disabled={!(confirmedDeal && valid) || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${confirmedDeal && valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${confirmedDeal && valid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Save Bank Details'}</Text>
         </Pressable>
       </View>
@@ -644,7 +657,7 @@ export function PaymentScheduleScreen() {
 
 // ─── SL-16 Registration Appointment ──────────────────────────
 export function SellRegistrationScreen() {
-  const { go, back, ctx } = useNav();
+  const { completeTo, back, ctx } = useNav();
   const { activity, request, error, load } = useSellerActivityContext(ctx);
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const appointment = activity?.registration?.appointment ?? ctx?.sellerActivity?.registration?.appointment;
@@ -696,7 +709,7 @@ export function SellRegistrationScreen() {
       </View>
       <Toast message={msg} />
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={() => go('dealComplete', { ...ctx, sellRequest: request })} disabled={!allChecked} className={`w-full h-12 rounded-xl items-center justify-center ${allChecked ? 'bg-brand-600' : 'bg-ink-100'}`}>
+        <Pressable onPress={() => completeTo('dealComplete', { ...ctx, sellRequest: request })} disabled={!allChecked} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${allChecked ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${allChecked ? 'text-white' : 'text-ink-400'}`}>Confirm Appointment</Text>
         </Pressable>
       </View>
@@ -706,7 +719,8 @@ export function SellRegistrationScreen() {
 
 // ─── SL-17 Deal Complete ─────────────────────────────────────
 export function DealCompleteScreen() {
-  const { go, ctx } = useNav();
+  const { go, resetTo, ctx } = useNav();
+  useFlowCompletionBack();
   const { request } = useSellRequestContext(ctx);
   return (
     <Screen fill>
@@ -719,6 +733,7 @@ export function DealCompleteScreen() {
           <FadeInView delay={80} className="flex-row items-center justify-between px-4 py-3 border-t border-ink-100"><Text className="text-[13px] font-medium">Registration</Text><Text className="text-[12px] font-semibold text-emerald-700">✓ Completed</Text></FadeInView>
         </View>
         <Btn className="w-full mt-5" icon="file-text" onPress={() => go('pdfViewer', { doc: { name: 'Sale Deed' }, from: 'dealComplete' })}>Download Sale Deed</Btn>
+        <Btn className="w-full mt-3" onPress={() => resetTo('home')}>Go to Home</Btn>
         <Pressable onPress={() => go('help')} className="mt-4"><Text className="text-[13px] text-brand-600 font-semibold">Contact Builtglory</Text></Pressable>
       </View>
     </Screen>
@@ -747,15 +762,15 @@ export function RejectedListingScreen() {
         </View>
         <View className="gap-2">
           <Btn variant="outline" className="w-full" icon="headphones" onPress={() => go('help')}>Contact Builtglory Team</Btn>
-          <Pressable onPress={() => setConfirmDelete(true)} className="w-full h-12 rounded-xl items-center justify-center"><Text className="text-rose-600 font-medium text-[14px]">Delete Listing</Text></Pressable>
+          <Pressable onPress={() => setConfirmDelete(true)} className="w-full min-h-12 py-3 rounded-xl items-center justify-center"><Text className="text-rose-600 font-medium text-[14px]">Delete Listing</Text></Pressable>
         </View>
       </View>
       {confirmDelete && (
         <Sheet onClose={() => setConfirmDelete(false)} title="Delete this listing?">
           <Text className="text-[13px] text-ink-500 mb-5">This permanently removes the listing. Your uploaded documents stay in your account.</Text>
           <View className="gap-2">
-            <Pressable onPress={() => go('sellerDashboard')} className="w-full h-12 rounded-xl items-center justify-center bg-rose-600"><Text className="text-white font-semibold text-[15px]">Delete Listing</Text></Pressable>
-            <Pressable onPress={() => setConfirmDelete(false)} className="w-full h-12 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Keep Listing</Text></Pressable>
+            <Pressable onPress={() => go('sellerDashboard')} className="w-full min-h-12 py-3 rounded-xl items-center justify-center bg-rose-600"><Text className="text-white font-semibold text-[15px]">Delete Listing</Text></Pressable>
+            <Pressable onPress={() => setConfirmDelete(false)} className="w-full min-h-12 py-3 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Keep Listing</Text></Pressable>
           </View>
         </Sheet>
       )}

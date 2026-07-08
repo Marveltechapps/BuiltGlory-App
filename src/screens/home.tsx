@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image, Keyboard, KeyboardAvoidingView, Linking, Platform, View, Text, Pressable, ScrollView, TextInput, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { androidInputStyle } from '../setup/androidText';
 import Svg, { Path } from 'react-native-svg';
 import Icon from '../components/Icon';
+import { BrandLogo } from '../components/BrandLogo';
 import {
   Screen, TopBar, Input, Chip, Badge, Heart, PropertyCard, PhotoPlaceholder,
   Sheet, Toast, useToast, Btn, Toggle, Field, Spinner, SkeletonCard, EmptyState,
@@ -312,11 +314,8 @@ export function HomeScreen() {
         onRefresh={() => loadHomeFeed(true)}
         fixedTop={
           <View className="px-4 pt-2 pb-5 flex-row items-center justify-between bg-white">
-            <Text className="text-[22px] font-bold text-brand-600 tracking-tight">BUILTGLORY</Text>
+            <BrandLogo size={36} />
             <View className="flex-row items-center gap-1">
-              <PressableScale onPress={() => go('devIndex')} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center">
-                <Icon name="layout-grid" size={16} color="#64748B" />
-              </PressableScale>
               <PressableScale onPress={() => go('help')} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center">
                 <Icon name="help-circle" size={17} color="#64748B" />
               </PressableScale>
@@ -407,14 +406,14 @@ export function HomeScreen() {
       )}
 
       <View ref={actionsRef} onLayout={() => measureTarget('actions', actionsRef)} className="px-4 mt-4 flex-row gap-3">
-        <PressableScale onPress={() => go('buyTypes')} className="flex-1 h-[100px] rounded-xl p-4 justify-between bg-brand-600">
+        <PressableScale onPress={() => go('buyTypes')} className="flex-1 min-h-[104px] rounded-xl p-4 justify-between bg-brand-600">
           <Icon name="home" size={26} color="white" />
           <View>
             <Text className="text-[16px] font-bold text-white">Buy</Text>
             <Text className="text-[11px] text-white/80">Browse properties</Text>
           </View>
         </PressableScale>
-        <PressableScale onPress={() => go('sellTypes')} className="flex-1 h-[100px] rounded-xl p-4 justify-between bg-brand-50">
+        <PressableScale onPress={() => go('sellTypes')} className="flex-1 min-h-[104px] rounded-xl p-4 justify-between bg-brand-50">
           <Icon name="tag" size={26} color="#1A6FFF" />
           <View>
             <Text className="text-[16px] font-bold text-brand-600">Sell</Text>
@@ -426,7 +425,7 @@ export function HomeScreen() {
       <View className="px-4 mt-3 flex-row gap-2">
         {[[String(featured.length + upcoming.length), 'Loaded listings'], ['0%', 'Brokerage'], ['24×7', 'Support']].map(([n, l]) => (
           <FadeInView key={l} className="flex-1 p-2.5 bg-ink-50 rounded-card items-center">
-            <AnimatedNumber value={n} className="text-[15px] font-bold text-brand-600 leading-none" />
+            <AnimatedNumber value={n} className="text-[15px] font-bold text-brand-600 leading-display" />
             <Text className="text-[10.5px] text-ink-500 mt-1">{l}</Text>
           </FadeInView>
         ))}
@@ -533,9 +532,22 @@ export function HomeScreen() {
   );
 }
 
+function useBrowseTypeGridLayout() {
+  const { width } = useWindowDimensions();
+  const gap = 10;
+  const pad = 16;
+  const columns = width < 360 ? 3 : 4;
+  const itemWidth = (width - pad * 2 - gap * (columns - 1)) / columns;
+  const iconBox = Math.round(Math.min(48, Math.max(36, itemWidth * 0.5)));
+  const iconSize = Math.round(iconBox * 0.45);
+  const fontSize = width < 360 ? 9.5 : 10.5;
+  return { gap, itemWidth, iconBox, iconSize, fontSize };
+}
+
 // ─── H-02 Search ─────────────────────────────────────────────
 export function SearchScreen() {
   const { go, back } = useNav();
+  const browseTypeGrid = useBrowseTypeGridLayout();
   const { authToken, getCachedValue, setCachedValue } = useAppState();
   const [q, setQ] = useState('');
   const [recents, setRecents] = useState<string[]>([]);
@@ -660,18 +672,27 @@ export function SearchScreen() {
             </View>
             <View>
               <Text className="text-[13px] font-semibold text-ink-700 mb-2">Browse by type</Text>
-              <View className="flex-row flex-wrap gap-2">
+              <View className="flex-row flex-wrap" style={{ gap: browseTypeGrid.gap }}>
                 {PROPERTY_TYPES.slice(0, 8).map((t) => (
                   <Pressable
                     key={t.id}
                     onPress={() => go('buyList', { type: t.id })}
-                    style={{ width: '23%' }}
-                    className="aspect-square rounded-card border border-ink-200 items-center justify-center"
+                    style={{ width: browseTypeGrid.itemWidth }}
+                    className="rounded-card border border-ink-200 items-center py-2.5 px-1"
                   >
-                    <View className="absolute inset-0 items-center justify-center">
-                      <Icon name={t.icon} size={20} color="#1A6FFF" />
+                    <View
+                      style={{ width: browseTypeGrid.iconBox, height: browseTypeGrid.iconBox }}
+                      className="rounded-xl bg-brand-50 items-center justify-center mb-2"
+                    >
+                      <Icon name={t.icon} size={browseTypeGrid.iconSize} color="#1A6FFF" />
                     </View>
-                    <Text className="absolute bottom-2 text-[10px] font-medium text-center px-1">{t.label}</Text>
+                    <Text
+                      style={{ fontSize: browseTypeGrid.fontSize }}
+                      className="font-medium text-center text-ink-700 leading-caption px-0.5"
+                      numberOfLines={2}
+                    >
+                      {t.label}
+                    </Text>
                   </Pressable>
                 ))}
               </View>
@@ -850,7 +871,7 @@ function Countdown({ date }: { date?: string }) {
     <View className="flex-row gap-2 mt-2">
       {[[d, 'days'], [h, 'hrs'], [m, 'min'], [s, 'sec']].map(([v, l]) => (
         <View key={l as string} className="bg-ink-900 rounded-md px-2 py-1.5 items-center" style={{ minWidth: 44 }}>
-          <Text className="text-white text-[15px] font-bold leading-none">{String(v).padStart(2, '0')}</Text>
+          <Text className="text-white text-[15px] font-bold leading-display">{String(v).padStart(2, '0')}</Text>
           <Text className="text-white/70 text-[9px] mt-0.5">{l}</Text>
         </View>
       ))}
@@ -1158,7 +1179,6 @@ const ticketCategories: { id: TicketCategory; label: string }[] = [
   { id: 'technical', label: 'Technical' },
   { id: 'payment', label: 'Payment' },
   { id: 'property_inquiry', label: 'Property' },
-  { id: 'kyc', label: 'KYC' },
   { id: 'complaint', label: 'Complaint' },
 ];
 
@@ -1501,7 +1521,7 @@ export function SupportTicketChatScreen() {
                     editable={!ticketClosed && !replying}
                     multiline
                     className="text-[14px] text-ink-900"
-                    style={{ minHeight: 24, maxHeight: 88, textAlignVertical: 'center', paddingVertical: 0 }}
+                    style={{ minHeight: 24, maxHeight: 88, textAlignVertical: 'top', ...androidInputStyle(14) }}
                   />
                 </View>
                 <Pressable

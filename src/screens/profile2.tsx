@@ -19,6 +19,9 @@ import {
   SellRequest,
 } from '../api/customer';
 import { BUY_ENQUIRIES_CACHE_PREFIX, VISITS_CACHE_PREFIX, VisitsCache } from '../state/primaryTabCache';
+import { usePolling } from '../hooks/usePolling';
+import { formatPaymentStatus } from '../utils/buyEnquiryStatus';
+import { sellDraftResumeContext, sellDraftResumeScreen, sellRequestPhotoUrls } from './sell';
 
 function apiMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -89,6 +92,187 @@ function enquiryStatusRank(status?: string) {
   return ranks[String(status || 'new')] ?? 0;
 }
 
+type SalesDealLike = {
+  stage?: string;
+  financials?: { tokenPaid?: boolean };
+  documentation?: {
+    registration?: { status?: string };
+    registrationStatus?: string;
+    documents?: unknown[];
+  };
+  documents?: unknown[];
+  closedAt?: string;
+};
+
+type TimelineState = 'done' | 'current' | 'alert' | 'future';
+
+const BUY_PIPELINE_STEPS = [
+  'Enquiry Submitted',
+  'Advisor Responded',
+  'Visit Scheduled',
+  'Negotiation',
+  'Deal Confirmed',
+  'Documents Shared',
+  'Token Payment',
+  'Registration',
+  'Closed',
+] as const;
+
+function dealOf(enquiry?: BuyEnquiry | null): SalesDealLike | null {
+  const deal = (enquiry as { deal?: SalesDealLike } | null | undefined)?.deal;
+  return deal && typeof deal === 'object' ? deal : null;
+}
+
+function hasActiveVisit(enquiry?: BuyEnquiry | null) {
+  return (enquiry?.visits || []).some((visit) => !['cancelled', 'missed'].includes(String(visit.status || '')));
+}
+
+function hasSharedDocuments(enquiry?: BuyEnquiry | null) {
+  const deal = dealOf(enquiry);
+  const enquiryDocs = [
+    ...(((enquiry as { documents?: unknown[] })?.documents) ?? []),
+    ...(((enquiry as { sharedDocuments?: unknown[] })?.sharedDocuments) ?? []),
+  ];
+  const dealDocs = [
+    ...(deal?.documents ?? []),
+    ...(deal?.documentation?.documents ?? []),
+  ];
+  return enquiryDocs.length > 0 || dealDocs.length > 0;
+}
+
+function registrationStatus(enquiry?: BuyEnquiry | null) {
+  const deal = dealOf(enquiry);
+  const reg = deal?.documentation?.registration;
+  return String(reg?.status || deal?.documentation?.registrationStatus || '').toLowerCase();
+}
+
+function isRegistrationComplete(enquiry?: BuyEnquiry | null) {
+  const value = registrationStatus(enquiry);
+  return ['completed', 'registered', 'done'].includes(value);
+}
+
+function isRegistrationInProgress(enquiry?: BuyEnquiry | null) {
+  const value = registrationStatus(enquiry);
+  return Boolean(value) && !['pending', 'not_started', 'not_requested'].includes(value) && !isRegistrationComplete(enquiry);
+}
+
+function resolveBuyPipelineIndex(enquiry?: BuyEnquiry | null): number {
+  const status = String(enquiry?.status || 'new');
+  const deal = dealOf(enquiry);
+  const dealStage = String(deal?.stage || '');
+
+  if (status === 'closed' || dealStage === 'closed') return 8;
+
+  if (dealStage) {
+    if (dealStage === 'lost') {
+      const rank = enquiryStatusRank(status);
+      if (rank >= 3) return 3;
+      if (rank >= 2 || hasActiveVisit(enquiry)) return 2;
+      if (rank >= 1) return 1;
+      return enquiry?.submittedAt ? 1 : 0;
+    }
+    if (dealStage === 'documentation') {
+      if (isRegistrationComplete(enquiry)) return 8;
+      if (isRegistrationInProgress(enquiry)) return 7;
+      return 5;
+    }
+    if (['token_payment', 'full_payment', 'stage_payment', 'interior_design'].includes(dealStage)) return 6;
+    if (dealStage === 'negotiation' || dealStage === 're_engagement') return 3;
+    if (dealStage === 'active_leads' || dealStage === 'site_visits') return 4;
+  }
+
+  const rank = enquiryStatusRank(status);
+  if (rank >= 4) return 8;
+  if (rank >= 3) return 3;
+  if (rank >= 2 || hasActiveVisit(enquiry)) return 3;
+  if (rank >= 1) return 2;
+  if (enquiry?.submittedAt) return 1;
+  return 0;
+}
+
+function pipelineStateForIndex(stepIndex: number, currentIndex: number): TimelineState {
+  if (currentIndex >= 8) return 'done';
+  if (stepIndex < currentIndex) return 'done';
+  if (stepIndex === currentIndex) return 'current';
+  return 'future';
+}
+
+function getEnquiryDisplayStatus(enquiry?: BuyEnquiry | null) {
+  const apiLabel = enquiry?.customerStageLabel;
+  if (typeof apiLabel === 'string' && apiLabel.trim()) return apiLabel;
+  const dealStage = String(dealOf(enquiry)?.stage || '');
+  const dealLabels: Record<string, string> = {
+    active_leads: 'Active Lead',
+    site_visits: 'Site Visits',
+    negotiation: 'Negotiating',
+    re_engagement: 'Re-engagement',
+    token_payment: 'Token Payment',
+    full_payment: 'Full Payment',
+    stage_payment: 'Stage Payment',
+    interior_design: 'Interior Design',
+    documentation: 'Documentation',
+    closed: 'Closed',
+    lost: 'Lost',
+  };
+  if (dealStage && dealLabels[dealStage]) return dealLabels[dealStage];
+  return enquiryStatusLabel(enquiry?.status);
+}
+
+function enquiryDisplayColor(enquiry?: BuyEnquiry | null) {
+  const dealStage = String(dealOf(enquiry)?.stage || '');
+  if (dealStage === 'closed' || enquiry?.status === 'closed') return 'ink';
+  if (dealStage === 'lost') return 'rose';
+  if (['token_payment', 'full_payment', 'stage_payment'].includes(dealStage)) return 'amber';
+  if (dealStage === 'documentation' || isRegistrationComplete(enquiry)) return 'green';
+  return enquiryStatusColor(enquiry?.status);
+}
+
+function buyPipelineProgressPercent(enquiry?: BuyEnquiry | null) {
+  const index = resolveBuyPipelineIndex(enquiry);
+  if (index >= 8) return 100;
+  return Math.round((index / 8) * 100);
+}
+
+function buildBuyEnquiryTimelineSteps(enquiry?: BuyEnquiry | null) {
+  const currentIndex = resolveBuyPipelineIndex(enquiry);
+  const status = String(enquiry?.status || 'new');
+  const deal = dealOf(enquiry);
+  const visit = enquiry?.visits?.[0];
+  const visitDate = visit?.visitDate ? new Date(visit.visitDate).toLocaleDateString() : undefined;
+  const submittedDate = enquiry?.submittedAt ? new Date(enquiry.submittedAt).toLocaleDateString() : undefined;
+
+  const details: (string | undefined)[] = [
+    undefined,
+    getEnquiryDisplayStatus(enquiry),
+    visitDate ? `Visit on ${visitDate}` : undefined,
+    deal?.stage === 'negotiation' || deal?.stage === 're_engagement' ? 'Price discussion in progress' : undefined,
+    deal ? 'Your deal is active in the sales pipeline' : undefined,
+    hasSharedDocuments(enquiry) ? 'Property documents are available' : undefined,
+    deal?.financials?.tokenPaid ? 'Token received' : deal?.stage === 'token_payment' ? 'Awaiting token payment' : undefined,
+    isRegistrationInProgress(enquiry) ? 'Registration in progress' : undefined,
+    status === 'closed' || deal?.stage === 'closed' ? 'Deal completed' : undefined,
+  ];
+
+  const dates: (string | undefined)[] = [
+    submittedDate,
+    undefined,
+    visitDate,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    deal?.closedAt ? new Date(deal.closedAt).toLocaleDateString() : undefined,
+  ];
+
+  return BUY_PIPELINE_STEPS.map((title, index) => ({
+    title,
+    state: pipelineStateForIndex(index, currentIndex),
+    detail: details[index],
+    date: dates[index],
+  }));
+}
+
 function ErrorCard({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <View className="rounded-card border border-rose-100 bg-rose-50 p-3">
@@ -129,6 +313,12 @@ export function ListingDetailScreen() {
     load();
   }, [authToken, sellRequestId]);
   const status = String(request?.status || (request?.isDraft ? 'draft' : 'submitted'));
+  const isDraftListing = request?.isDraft || status === 'draft';
+  const coverPhoto = sellRequestPhotoUrls(request)[0];
+  const continueDraft = () => {
+    if (!request) return;
+    go(sellDraftResumeScreen(request.draftStep), sellDraftResumeContext(request));
+  };
   const steps = [
     { title: 'Submitted', state: request?.submittedAt || !request?.isDraft ? 'done' : 'future', date: request?.submittedAt ? new Date(request.submittedAt).toLocaleDateString() : undefined },
     { title: 'Verification Call', state: ['new', 'under_review', 'changes_requested', 'approved', 'sold'].includes(status) ? 'current' : 'future', detail: status.replace(/_/g, ' ') },
@@ -149,7 +339,7 @@ export function ListingDetailScreen() {
         {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={load} /></View>}
         <View className="rounded-card border border-ink-200 overflow-hidden mb-5">
           <View className="flex-row gap-3 p-3">
-            <PhotoPlaceholder tag={sellRequestId || request?.referenceId || 'listing'} width={72} height={72} className="rounded-md">
+            <PhotoPlaceholder tag={sellRequestId || request?.referenceId || 'listing'} width={72} height={72} imageUri={coverPhoto} className="rounded-md">
               <View className="absolute top-1 left-1"><Badge color={request?.isDraft ? 'amber' : status === 'rejected' ? 'rose' : 'brand'}>{request?.isDraft ? 'draft' : status}</Badge></View>
             </PhotoPlaceholder>
             <View className="flex-1">
@@ -166,8 +356,13 @@ export function ListingDetailScreen() {
         </View>
         <View className="rounded-card bg-brand-50 p-3 mb-5 flex-row items-center gap-3">
           <View className="w-11 h-11 rounded-full bg-brand-600 items-center justify-center"><Icon name="zap" size={20} color="white" /></View>
-          <View><Text className="text-[13px] font-semibold">{status.replace(/_/g, ' ')}</Text><Text className="text-[11.5px] text-brand-700">{request?.changeRequests?.[0] || request?.rejectionReason || 'Backend listing status is up to date'}</Text></View>
+          <View className="flex-1"><Text className="text-[13px] font-semibold">{status.replace(/_/g, ' ')}</Text><Text className="text-[11.5px] text-brand-700">{request?.changeRequests?.[0] || request?.rejectionReason || 'Backend listing status is up to date'}</Text></View>
         </View>
+        {isDraftListing && (
+          <View className="mb-5">
+            <Btn className="w-full" onPress={continueDraft}>Continue listing</Btn>
+          </View>
+        )}
         <Timeline steps={steps as any} />
       </View>
     </Screen>
@@ -248,53 +443,62 @@ export function MyVisitsScreen() {
 
 export function MyDealsScreen() {
   const { go, back } = useNav();
-  const { authToken } = useAppState();
+  const { authToken, setCachedValue } = useAppState();
   const [tab, setTab] = useState('active');
   const [deals, setDeals] = useState<Array<{ id: string; property: string; price: number; stage: string; progress: number; status: string; enquiry?: BuyEnquiry; payment?: CustomerPayment }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const loadDeals = async () => {
+  const loadDeals = async (silent = false) => {
     if (!authToken) {
       setError('Please sign in again to load your deals.');
       return;
     }
-    setLoading(true);
-    setError('');
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const [enquiries, payments] = await Promise.all([
         listBuyEnquiries(authToken, { limit: 50, sort: 'newest' }),
         listCustomerPayments(authToken, { limit: 50, sort: 'newest' }),
       ]);
+      setCachedValue(`${BUY_ENQUIRIES_CACHE_PREFIX}:${authToken}`, enquiries);
       const enquiryDeals = enquiries
-        .filter((enquiry) => enquiry.deal || ['deal_confirmed', 'token_paid', 'registration', 'completed'].includes(String(enquiry.status)))
+        .filter((enquiry) => enquiry.deal || enquiryStatusRank(String(enquiry.status)) >= 3)
         .map((enquiry) => ({
           id: enquiryId(enquiry),
           property: enquiryProperty(enquiry)?.title || enquiry.propertySnapshot?.title || enquiry.referenceId || 'Property deal',
           price: enquiryProperty(enquiry)?.price || enquiry.propertySnapshot?.price || 0,
-          stage: String(enquiry.status || 'active').replace(/_/g, ' '),
-          progress: String(enquiry.status).includes('completed') ? 100 : 65,
-          status: String(enquiry.status).includes('completed') ? 'completed' : 'active',
+          stage: getEnquiryDisplayStatus(enquiry),
+          progress: buyPipelineProgressPercent(enquiry),
+          status: resolveBuyPipelineIndex(enquiry) >= 8 ? 'completed' : 'active',
           enquiry,
         }));
-      const paymentDeals = payments.map((payment) => ({
-        id: String(payment._id ?? payment.id ?? payment.referenceId),
-        property: payment.referenceId || 'Payment record',
-        price: payment.amount || 0,
-        stage: String(payment.status || payment.type || 'payment').replace(/_/g, ' '),
-        progress: payment.status === 'paid' ? 100 : 75,
-        status: payment.status === 'paid' ? 'completed' : 'active',
-        payment,
-      }));
+      const paymentDeals = payments
+        .filter((payment) => !enquiries.some((enquiry) => {
+          const dealId = String((enquiry as any)?.deal?._id ?? (enquiry as any)?.deal?.id ?? '');
+          return dealId && dealId === String(payment.dealId ?? '');
+        }))
+        .map((payment) => ({
+          id: String(payment._id ?? payment.id ?? payment.referenceId),
+          property: payment.referenceId || 'Payment record',
+          price: payment.amount || 0,
+          stage: formatPaymentStatus(payment.status || payment.type),
+          progress: payment.status === 'paid' ? 100 : 75,
+          status: payment.status === 'paid' ? 'completed' : 'active',
+          payment,
+        }));
       setDeals([...enquiryDeals, ...paymentDeals]);
     } catch (err) {
-      setError(apiMessage(err, 'Could not load your deals.'));
+      if (!silent) setError(apiMessage(err, 'Could not load your deals.'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
   useEffect(() => {
     loadDeals();
   }, [authToken]);
+  usePolling(() => loadDeals(true), 15000, Boolean(authToken));
   const filtered = tab === 'all' ? deals : deals.filter((d) => d.status === tab);
   return (
     <Screen>
@@ -319,7 +523,7 @@ export function MyDealsScreen() {
                 <View className="flex-row items-center justify-between mb-1"><Text className="text-[11px] text-ink-500">Progress</Text><Text className="text-[11px] font-semibold text-ink-700">{d.progress}%</Text></View>
                 <View className="w-full h-2 bg-ink-100 rounded-full overflow-hidden"><View className="h-full bg-brand-600 rounded-full" style={{ width: `${d.progress}%` }} /></View>
               </View>
-              <Pressable onPress={() => d.enquiry ? go('enquiryDetail', { enquiryId: enquiryId(d.enquiry), enquiry: d.enquiry }) : go('paymentSchedule')} className="w-full h-9 rounded-card bg-brand-50 items-center justify-center"><Text className="text-brand-600 text-[12px] font-semibold">View Details →</Text></Pressable>
+              <Pressable onPress={() => d.enquiry ? go('enquiryDetail', { enquiryId: enquiryId(d.enquiry), enquiry: d.enquiry }) : go('paymentSchedule')} className="w-full min-h-9 py-2 rounded-card bg-brand-50 items-center justify-center"><Text className="text-brand-600 text-[12px] font-semibold">View Details →</Text></Pressable>
             </View>
           ))}
         </View>
@@ -351,20 +555,22 @@ export function NoListingsScreen() {
 
 // ─── P-08 Enquiry Detail / Buyer Status Tracker ──────────────
 export function EnquiryDetailScreen() {
-  const { go, back, ctx } = useNav<{ enquiryId?: string; enquiry?: BuyEnquiry }>();
+  const { go, back, ctx } = useNav<{ enquiryId?: string; enquiry?: BuyEnquiry; refresh?: boolean }>();
   const { authToken, getCachedValue, setCachedValue } = useAppState();
   const [enquiry, setEnquiry] = useState<BuyEnquiry | null>(ctx.enquiry || null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [canceling, setCanceling] = useState(false);
   const activeEnquiryId = ctx.enquiryId || enquiryId(ctx.enquiry);
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!authToken || !activeEnquiryId) {
       if (!enquiry) setError('Enquiry context is missing.');
       return;
     }
-    setLoading(true);
-    setError('');
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const latest = await getBuyEnquiry(authToken, activeEnquiryId);
       setEnquiry(latest);
@@ -375,14 +581,15 @@ export function EnquiryDetailScreen() {
         setCachedValue(cacheKey, next);
       }
     } catch (err) {
-      setError(apiMessage(err, 'Could not load enquiry details.'));
+      if (!silent) setError(apiMessage(err, 'Could not load enquiry details.'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
   useEffect(() => {
-    load();
-  }, [authToken, activeEnquiryId]);
+    load(Boolean(ctx?.refresh));
+  }, [authToken, activeEnquiryId, ctx?.refresh]);
+  usePolling(() => load(true), 10000, Boolean(authToken && activeEnquiryId));
   const cancel = async () => {
     if (!authToken || !activeEnquiryId) return;
     setCanceling(true);
@@ -407,21 +614,11 @@ export function EnquiryDetailScreen() {
   const isCancelled = status.includes('cancel');
   const submittedLabel = enquiry?.submittedAt ? new Date(enquiry.submittedAt).toLocaleDateString() : 'Pending';
   const visitCount = enquiry?.visits?.length || 0;
-  const rank = enquiryStatusRank(status);
-  const steps = [
-    { title: 'Enquiry Submitted', state: enquiry?.submittedAt ? 'done' : 'current', date: enquiry?.submittedAt ? new Date(enquiry.submittedAt).toLocaleDateString() : undefined },
-    { title: 'Advisor Responded', state: rank >= 1 ? 'done' : 'current', detail: enquiryStatusLabel(status) },
-    { title: 'Visit Scheduled', state: rank >= 2 || enquiry?.visits?.length ? 'done' : 'future', detail: enquiry?.visits?.[0]?.visitDate ? new Date(enquiry.visits[0].visitDate).toLocaleDateString() : undefined },
-    { title: 'Negotiation', state: rank >= 3 ? 'current' : 'future' },
-    { title: 'Deal Confirmed', state: enquiry?.deal ? 'current' : 'future' },
-    { title: 'Documents Shared', state: status.includes('document') ? 'current' : 'future' },
-    { title: 'Token Payment', state: status.includes('payment') ? 'current' : 'future' },
-    { title: 'Registration', state: status.includes('registration') ? 'current' : 'future' },
-    { title: 'Closed', state: rank >= 4 || status.includes('completed') ? 'done' : 'future' },
-  ] as const;
+  const displayStatus = getEnquiryDisplayStatus(enquiry);
+  const steps = buildBuyEnquiryTimelineSteps(enquiry);
   return (
     <Screen fill>
-      <TopBar onBack={back} title="Enquiry Status" sub="8-step pipeline" />
+      <TopBar onBack={back} title="Enquiry Status" sub="9-step pipeline" />
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
         <View className="px-4">
           {loading && <LoadingBlock label="Loading enquiry details..." />}
@@ -432,7 +629,7 @@ export function EnquiryDetailScreen() {
               <View className="flex-1 min-w-0">
                 <View className="flex-row items-start gap-2">
                   <Text className="text-[14px] font-semibold text-ink-900 flex-1" numberOfLines={2}>{property?.title || enquiry?.propertySnapshot?.title || 'Property enquiry'}</Text>
-                  <Badge color={enquiryStatusColor(status)}>{enquiryStatusLabel(status)}</Badge>
+                  <Badge color={enquiryDisplayColor(enquiry)}>{displayStatus}</Badge>
                 </View>
                 <Text className="text-[11.5px] text-ink-500 mt-1" numberOfLines={1}>{property?.city || enquiry?.propertySnapshot?.location || 'Location pending'}</Text>
                 <Text className="text-[14px] font-bold text-brand-600 mt-1">{formatINR(property?.price || enquiry?.propertySnapshot?.price || 0)}</Text>
@@ -440,7 +637,7 @@ export function EnquiryDetailScreen() {
               </View>
             </View>
             <View className="flex-row border-t border-ink-100 bg-ink-50">
-              {[[submittedLabel, 'Submitted'], [String(visitCount), 'Visits'], [enquiryStatusLabel(status), 'Status']].map(([value, label]) => (
+              {[[submittedLabel, 'Submitted'], [String(visitCount), 'Visits'], [displayStatus, 'Status']].map(([value, label]) => (
                 <View key={label} className="flex-1 py-2.5 px-2 items-center">
                   <Text className="text-[12px] font-semibold text-ink-800 text-center" numberOfLines={1}>{value}</Text>
                   <Text className="text-[10px] text-ink-500 mt-0.5">{label}</Text>
@@ -451,7 +648,7 @@ export function EnquiryDetailScreen() {
           <View className="rounded-card bg-brand-50 border border-brand-100 p-3 mb-5 flex-row items-center gap-3">
             <View className="w-10 h-10 rounded-full bg-brand-600 items-center justify-center"><Icon name="activity" size={18} color="white" /></View>
             <View className="flex-1">
-              <Text className="text-[13px] font-semibold text-ink-900">{enquiryStatusLabel(status)}</Text>
+              <Text className="text-[13px] font-semibold text-ink-900">{displayStatus}</Text>
               <Text className="text-[11.5px] text-brand-700 mt-0.5">{visitCount ? `${visitCount} visit record(s) linked to this enquiry.` : 'Builtglory will update each step as your enquiry progresses.'}</Text>
             </View>
           </View>
@@ -459,7 +656,7 @@ export function EnquiryDetailScreen() {
         </View>
       </ScrollView>
       <View className="p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={cancel} disabled={canceling || isCancelled} className={`w-full h-12 rounded-xl items-center justify-center ${canceling || isCancelled ? 'bg-ink-50' : 'bg-rose-50'}`}>
+        <Pressable onPress={cancel} disabled={canceling || isCancelled} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${canceling || isCancelled ? 'bg-ink-50' : 'bg-rose-50'}`}>
           <Text className={`font-medium text-[14px] ${canceling || isCancelled ? 'text-ink-400' : 'text-rose-600'}`}>{isCancelled ? 'Enquiry Cancelled' : canceling ? 'Cancelling...' : 'Cancel Enquiry'}</Text>
         </Pressable>
       </View>

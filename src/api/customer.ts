@@ -1,18 +1,6 @@
-declare const process: { env?: Record<string, string | undefined> } | undefined;
+import { CUSTOMER_API_BASE_URL } from '../config/api';
 
-const DEFAULT_API_BASE_URL = 'http://192.168.1.10:3000/api/v1';
-
-function normalizeApiBaseUrl(value: string) {
-  const trimmed = value.trim().replace(/\/+$/, '');
-  if (!trimmed) return DEFAULT_API_BASE_URL;
-  if (trimmed.endsWith('/api/v1')) return trimmed;
-  if (trimmed.endsWith('/api')) return `${trimmed}/v1`;
-  return `${trimmed}/api/v1`;
-}
-
-export const CUSTOMER_API_BASE_URL = normalizeApiBaseUrl(
-  process?.env?.EXPO_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL
-);
+export { API_BASE_URL, CUSTOMER_API_BASE_URL, getApiBaseUrl, getApiOrigin } from '../config/api';
 
 export type ApiEnvelope<T> = {
   data: T;
@@ -74,17 +62,29 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
   return value ? `?${value}` : '';
 }
 
-async function parseJson<T>(response: Response): Promise<T | null> {
-  const text = await response.text();
-  if (!text) return null;
-  return JSON.parse(text) as T;
+async function readResponseBody<T>(response: Response): Promise<{ payload: T | null; rawText: string }> {
+  const rawText = await response.text();
+  if (!rawText) return { payload: null, rawText };
+  try {
+    return { payload: JSON.parse(rawText) as T, rawText };
+  } catch {
+    return { payload: null, rawText };
+  }
 }
 
-function readApiError(response: Response, payload: ApiEnvelope<unknown> | ApiErrorPayload | null) {
+function readApiError(
+  response: Response,
+  payload: ApiEnvelope<unknown> | ApiErrorPayload | null,
+  rawText: string,
+) {
   const errorPayload = payload as ApiErrorPayload | null;
-  return new CustomerApiError(errorPayload?.error?.message ?? 'Request failed.', {
+  const message =
+    errorPayload?.error?.message
+    ?? (response.status === 429 ? 'Too many requests. Please wait a moment and try again.' : null)
+    ?? (rawText.trim() || 'Request failed.');
+  return new CustomerApiError(message, {
     status: response.status,
-    code: errorPayload?.error?.code,
+    code: errorPayload?.error?.code ?? (response.status === 429 ? 'RATE_LIMITED' : undefined),
     details: errorPayload?.error?.details,
     requestId: errorPayload?.meta?.requestId,
   });
@@ -109,7 +109,7 @@ async function customerMultipartRequest<T>(path: string, accessToken: string, fo
     body: formData,
   });
 
-  const payload = await parseJson<ApiEnvelope<T> | ApiErrorPayload>(response);
+  const { payload, rawText } = await readResponseBody<ApiEnvelope<T> | ApiErrorPayload>(response);
   if (!response.ok) {
     if (response.status === 401 && !skipAuthRefresh) {
       const refreshedSession = await refreshAccessToken(accessToken);
@@ -117,7 +117,7 @@ async function customerMultipartRequest<T>(path: string, accessToken: string, fo
         return customerMultipartRequest<T>(path, refreshedSession.accessToken, formData, true);
       }
     }
-    throw readApiError(response, payload);
+    throw readApiError(response, payload, rawText);
   }
 
   if (!payload) return null as T;
@@ -138,7 +138,7 @@ export async function customerApiRequest<T>(path: string, options: RequestOption
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
 
-  const payload = await parseJson<ApiEnvelope<T> | ApiErrorPayload>(response);
+  const { payload, rawText } = await readResponseBody<ApiEnvelope<T> | ApiErrorPayload>(response);
   if (!response.ok) {
     if (response.status === 401 && options.accessToken && !options.skipAuthRefresh) {
       const refreshedSession = await refreshAccessToken(options.accessToken);
@@ -150,7 +150,7 @@ export async function customerApiRequest<T>(path: string, options: RequestOption
         });
       }
     }
-    throw readApiError(response, payload);
+    throw readApiError(response, payload, rawText);
   }
 
   if (!payload) return null as T;
@@ -244,6 +244,44 @@ export async function verifyCustomerOtp({ phone, otp, countryCode = '+91', reque
   return customerApiRequest<VerifyCustomerOtpResponse>('/auth/customer/otp/verify', {
     method: 'POST',
     body: { countryCode, phone, otp, requestId, purpose },
+  });
+}
+
+export type SendEmailOtpResponse = {
+  requestId: string;
+  email: string;
+  expiresInSeconds: number;
+  canResendAt: string;
+};
+
+export async function sendEmailOtp(email: string) {
+  return customerApiRequest<SendEmailOtpResponse>('/auth/email/otp/send', {
+    method: 'POST',
+    body: { email: email.trim().toLowerCase() },
+  });
+}
+
+export async function resendEmailOtp(email: string) {
+  return customerApiRequest<SendEmailOtpResponse>('/auth/email/otp/resend', {
+    method: 'POST',
+    body: { email: email.trim().toLowerCase() },
+  });
+}
+
+export type VerifyEmailOtpInput = {
+  email: string;
+  otp: string;
+  requestId?: string;
+};
+
+export type VerifyEmailOtpResponse = AuthSession & {
+  user?: CustomerProfile;
+};
+
+export async function verifyEmailOtp({ email, otp, requestId }: VerifyEmailOtpInput) {
+  return customerApiRequest<VerifyEmailOtpResponse>('/auth/email/otp/verify', {
+    method: 'POST',
+    body: { email: email.trim().toLowerCase(), otp, requestId },
   });
 }
 
@@ -427,6 +465,16 @@ export type CustomerNotification = {
   unread: boolean;
   createdAt: string;
   deepLink?: string | null;
+  screen?: string | null;
+  screenKey?: string | null;
+  notificationType?: string | null;
+  entityId?: string | null;
+  entityType?: string | null;
+  image?: string | null;
+  listingId?: string | null;
+  enquiryId?: string | null;
+  dealId?: string | null;
+  propertyId?: string | null;
 };
 
 function mapCustomerNotification(raw: RawEntity): CustomerNotification {
@@ -436,14 +484,24 @@ function mapCustomerNotification(raw: RawEntity): CustomerNotification {
   const event = stringOf(raw.event, 'notification');
   return {
     id: idOf(raw),
-    title: stringOf(payload.title, event.replace(/[_-]/g, ' ')),
-    body: stringOf(payload.body ?? payload.message ?? raw.failureReason, stringOf(raw.recipient)),
+    title: stringOf(payload.title ?? raw.title, event.replace(/[_-]/g, ' ')),
+    body: stringOf(payload.body ?? payload.message ?? raw.message ?? raw.failureReason, stringOf(raw.recipient)),
     event,
     channel: stringOf(raw.channel, 'in_app'),
     status,
     unread: !isRead,
-    createdAt: stringOf(raw.createdAt ?? raw.sentAt ?? new Date().toISOString()),
-    deepLink: stringOf(payload.deepLink) || null,
+    createdAt: stringOf(raw.createdAt ?? payload.createdAt ?? raw.sentAt ?? new Date().toISOString()),
+    deepLink: stringOf(payload.deepLink ?? payload.screenKey) || null,
+    screen: stringOf(raw.screen ?? payload.screen) || null,
+    screenKey: stringOf(payload.screenKey ?? payload.deepLink) || null,
+    notificationType: stringOf(raw.notificationType ?? payload.notificationType ?? payload.type) || null,
+    entityId: stringOf(raw.entityId ?? payload.entityId) || null,
+    entityType: stringOf(raw.entityType ?? payload.entityType) || null,
+    image: stringOf(raw.image ?? payload.image) || null,
+    listingId: stringOf(raw.listingId ?? payload.listingId) || null,
+    enquiryId: stringOf(raw.enquiryId ?? payload.enquiryId) || null,
+    dealId: stringOf(raw.dealId ?? payload.dealId) || null,
+    propertyId: stringOf(raw.propertyId ?? payload.propertyId) || null,
   };
 }
 
@@ -466,6 +524,13 @@ export async function markCustomerNotificationRead(accessToken: string, notifica
     method: 'PATCH',
     accessToken,
   }).then(mapCustomerNotification);
+}
+
+export async function deleteCustomerNotification(accessToken: string, notificationId: string) {
+  return customerApiRequest<{ deleted: boolean; id: string }>(`/me/notifications/${notificationId}`, {
+    method: 'DELETE',
+    accessToken,
+  });
 }
 
 export type CustomerProperty = {
@@ -789,6 +854,8 @@ export type BuyEnquiry = {
   };
   assignedTo?: string;
   submittedAt?: string;
+  customerStage?: string | null;
+  customerStageLabel?: string | null;
   visits?: CustomerVisit[];
   deal?: unknown;
 };
