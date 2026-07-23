@@ -85,12 +85,49 @@ function otpSendErrorMessage(error: unknown) {
     if (error.status === 429 || error.code === 'RATE_LIMITED') {
       return 'Too many OTP requests. Please wait a few minutes and try again.';
     }
-    return error.message;
+    if (error.code === 'SMS_CREDITS_EXHAUSTED' || error.message.toLowerCase().includes('insufficient')) {
+      return 'SMS service is temporarily unavailable (provider credits exhausted). Please try email login or contact support.';
+    }
+    if (error.code === 'SMS_PROVIDER_UNAVAILABLE' || error.code === 'SMS_DELIVERY_FAILED' || error.code === 'SMS_PROVIDER_AUTH_FAILED') {
+      return error.message || 'Could not send OTP via SMS. Please try again shortly.';
+    }
+    if (error.code === 'SMS_CONFIG_MISSING' || error.code === 'SMS_CONFIG_INVALID' || error.code === 'SMS_LOG_MODE_FORBIDDEN') {
+      return 'SMS service is not configured correctly. Please contact support or use email login.';
+    }
+    if (error.status === 409 || error.code === 'CONFLICT') {
+      return error.message || 'Please wait before requesting another OTP.';
+    }
+    if (error.status === 400 || error.status === 422) {
+      return error.message || 'Enter a valid 10-digit mobile number.';
+    }
+    return error.message || 'Failed to send OTP. Please try again.';
   }
   if (isNetworkReachabilityError(error) && CUSTOMER_API_BASE_URL.startsWith('http://')) {
     return `Could not reach the backend at ${CUSTOMER_API_BASE_URL}. Release APKs block plain HTTP unless the app is rebuilt with cleartext traffic enabled (run npx expo prebuild --clean, then rebuild the APK). Expo Go works because it runs in debug mode.`;
   }
   return `Could not reach the backend at ${CUSTOMER_API_BASE_URL}. Set EXPO_PUBLIC_API_URL in Customer-App-V1/.env to your computer's LAN IP (same Wi-Fi as the phone), then restart Expo or rebuild the app.`;
+}
+
+function profileSaveErrorMessage(error: unknown) {
+  if (error instanceof CustomerApiError) {
+    if (error.status === 409 || error.code === 'CONFLICT') {
+      return error.message || 'This phone number or email is already registered to another account.';
+    }
+    if (error.status === 401 || error.code === 'UNAUTHORIZED') {
+      return 'Your session expired. Please sign in again and retry.';
+    }
+    if (error.status === 400 || error.status === 422) {
+      return error.message || 'Some profile fields are invalid. Please check and try again.';
+    }
+    if (error.status >= 500) {
+      return error.message && error.message !== 'Unexpected server error.'
+        ? error.message
+        : 'Could not save your profile due to a server error. Please try again.';
+    }
+    return error.message || 'Could not save your profile. Please try again.';
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return 'Could not save your profile. Please try again.';
 }
 
 type OnboardingSlideConfig = {
@@ -549,7 +586,11 @@ export function OTPScreen() {
     }
   };
 
-  const applyOtpRequest = (otpRequest: { requestId: string; expiresInSeconds: number; canResendAt: string }) => {
+  const applyOtpRequest = (otpRequest: {
+    requestId: string;
+    expiresInSeconds: number;
+    canResendAt: string;
+  }) => {
     setRequestId(otpRequest.requestId);
     setExpiresSeconds(otpRequest.expiresInSeconds || 300);
     setResendSeconds(secondsUntil(otpRequest.canResendAt, 60));
@@ -685,7 +726,15 @@ export function ProfileSetupScreen() {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
-  const valid = name.trim().length >= 2;
+  const verifiedPhone = typeof currentUser?.phone === 'string'
+    ? currentUser.phone
+    : typeof currentUser?.mobileNumber === 'string'
+      ? currentUser.mobileNumber
+      : '';
+  const hasVerifiedPhone = !!verifiedPhone;
+  const hasVerifiedEmail = currentUser?.isEmailVerified === true || (!!currentUser?.email && !hasVerifiedPhone);
+  const phoneDigits = phone.replace(/\D/g, '').slice(-10);
+  const valid = name.trim().length >= 2 && (hasVerifiedPhone || phoneDigits.length === 10);
 
   useEffect(() => {
     let mounted = true;
@@ -767,24 +816,46 @@ export function ProfileSetupScreen() {
     setSavingProfile(true);
     setProfileError(null);
     try {
-      await updateProfile({
+      const payload: {
+        name: string;
+        email?: string | null;
+        phone?: string | null;
+        mobileNumber?: string | null;
+        phoneNormalized?: string | null;
+      } = {
         name: name.trim(),
-        email: hasVerifiedEmail ? undefined : (email.trim() ? email.trim() : null),
-        phone: hasVerifiedPhone ? undefined : (phone.trim() ? phone.trim() : null),
-        mobileNumber: hasVerifiedPhone ? undefined : (phone.trim() ? phone.trim() : null),
+      };
+      // Never send email:null — Mongo sparse unique indexes treat null as a real value
+      // and the second profile save collides with E11000.
+      if (!hasVerifiedEmail && email.trim()) {
+        payload.email = email.trim().toLowerCase();
+      }
+      if (!hasVerifiedPhone) {
+        payload.phone = phoneDigits;
+        payload.mobileNumber = phoneDigits;
+        payload.phoneNormalized = `91${phoneDigits}`;
+      }
+      console.log('[BuiltGlory Profile] saving', {
+        apiBaseUrl: CUSTOMER_API_BASE_URL,
+        payload,
+        hasAuthToken: Boolean(authToken),
       });
+      await updateProfile(payload);
       go('locationType');
-    } catch {
-      setProfileError('Could not save your profile. Please try again.');
+    } catch (error) {
+      console.warn('[BuiltGlory Profile] save failed', {
+        apiBaseUrl: CUSTOMER_API_BASE_URL,
+        error: error instanceof CustomerApiError
+          ? { status: error.status, code: error.code, message: error.message, details: error.details, requestId: error.requestId }
+          : error,
+      });
+      setProfileError(profileSaveErrorMessage(error));
     } finally {
       setSavingProfile(false);
     }
   };
   const avatarBg = { empty: 'bg-ink-100', uploading: 'bg-ink-100', done: 'bg-brand-100', error: 'bg-rose-50' };
   const avatarIconColor = { empty: '#94A3B8', uploading: '#94A3B8', done: '#1A6FFF', error: '#E11D48' };
-  const verifiedPhone = typeof currentUser?.phone === 'string' ? currentUser.phone : typeof currentUser?.mobileNumber === 'string' ? currentUser.mobileNumber : '';
-  const hasVerifiedPhone = !!verifiedPhone;
-  const hasVerifiedEmail = currentUser?.isEmailVerified === true || (!!currentUser?.email && !hasVerifiedPhone);
   const displayEmail = typeof currentUser?.email === 'string' && currentUser.email ? currentUser.email : email;
   return (
     <Screen>

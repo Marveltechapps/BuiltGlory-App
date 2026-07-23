@@ -106,70 +106,9 @@ function mapSharedDocuments(enquiry?: BuyEnquiry | null): SharedDocument[] {
     .filter(Boolean) as SharedDocument[];
 }
 
-function ErrorCard({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return (
-    <View className="mx-4 mb-3 p-3 bg-rose-50 border border-rose-200 rounded-card flex-row items-center gap-2">
-      <Icon name="alert-circle" size={14} color="#E11D48" />
-      <Text className="text-[12px] text-rose-700 flex-1">{message}</Text>
-      {onRetry && (
-        <Pressable onPress={onRetry} className="px-2 py-1 rounded-md bg-white border border-rose-200">
-          <Text className="text-[11px] font-semibold text-rose-700">Retry</Text>
-        </Pressable>
-      )}
-    </View>
-  );
-}
-
-function LoadingBlock({ label }: { label: string }) {
-  return (
-    <View className="py-8 items-center gap-2">
-      <Spinner color="#1A6FFF" size={20} />
-      <Text className="text-[12px] text-ink-500">{label}</Text>
-    </View>
-  );
-}
-
-function useEnquiryContext(ctx: any, options: { pollMs?: number } = {}) {
-  const { authToken, getCachedValue, setCachedValue } = useAppState();
-  const initial = ctx?.enquiry as BuyEnquiry | undefined;
-  const [enquiry, setEnquiry] = useState<BuyEnquiry | null>(initial ?? null);
-  const [loading, setLoading] = useState(!!ctx?.enquiryId);
-  const [error, setError] = useState<string | null>(null);
-  const activeEnquiryId = ctx?.enquiryId || idOf(initial);
-  const pollMs = options.pollMs ?? 10000;
-  const syncCache = useCallback((latest: BuyEnquiry) => {
-    if (!authToken) return;
-    const cacheKey = `${BUY_ENQUIRIES_CACHE_PREFIX}:${authToken}`;
-    const cached = getCachedValue<BuyEnquiry[]>(cacheKey);
-    if (!cached) return;
-    const next = cached.map((item) => enquiryId(item) === enquiryId(latest) ? latest : item);
-    setCachedValue(cacheKey, next);
-  }, [authToken, getCachedValue, setCachedValue]);
-  const load = useCallback(async (silent = false) => {
-    if (!authToken || !activeEnquiryId) {
-      if (!silent) setLoading(false);
-      return;
-    }
-    if (!silent) {
-      setLoading(true);
-      setError(null);
-    }
-    try {
-      const latest = await getBuyEnquiry(authToken, activeEnquiryId);
-      setEnquiry(latest);
-      syncCache(latest);
-    } catch {
-      if (!silent) setError('Could not load enquiry context.');
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [authToken, activeEnquiryId, syncCache]);
-  useEffect(() => {
-    load(Boolean(ctx?.refresh));
-  }, [load, ctx?.refresh]);
-  usePolling(() => load(true), pollMs, Boolean(authToken && activeEnquiryId));
-  return { enquiry, enquiryId: activeEnquiryId, loading, error, reload: () => load(false) };
-}
+import { useBuyEnquiryResource } from '../hooks/useBuyEnquiryResource';
+import { EmptyStateCard, ErrorCard, LoadingBlock, OfflineCard } from '../components/screenStates';
+import { isNetworkError } from '../utils/apiErrors';
 
 function usePropertyContext(ctx: any) {
   const initial = ctx?.property as CustomerProperty | undefined;
@@ -204,7 +143,7 @@ function usePropertyContext(ctx: any) {
 export function DocumentsSharedScreen() {
   const { go, back, ctx } = useNav();
   const { authToken } = useAppState();
-  const { enquiry, loading, error, reload } = useEnquiryContext(ctx);
+  const { enquiry, enquiryId, loading, error, offline, reload, refresh, refreshing } = useBuyEnquiryResource(ctx);
   const title = enquiry?.propertySnapshot?.title ?? 'Property documents';
   const [downloaded, setDownloaded] = useState<Record<string, string>>({});
   const [docError, setDocError] = useState<string | null>(null);
@@ -229,9 +168,10 @@ export function DocumentsSharedScreen() {
     }
   };
   return (
-    <Screen>
+    <Screen refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={back} title="Documents Shared" sub={title} />
       {loading && <LoadingBlock label="Loading enquiry documents..." />}
+      {offline && <OfflineCard onRetry={reload} />}
       {error && <ErrorCard message={error} onRetry={reload} />}
       {docError && <ErrorCard message={docError} />}
       <View className="px-4">
@@ -241,11 +181,11 @@ export function DocumentsSharedScreen() {
         </View>
         <View className="gap-2.5">
           {!loading && docs.length === 0 && (
-            <View className="rounded-card border border-ink-200 bg-white p-4 items-center">
-              <Icon name="file-search" size={24} color="#94A3B8" />
-              <Text className="text-[13px] font-semibold mt-2">No shared documents yet</Text>
-              <Text className="text-[11.5px] text-ink-500 text-center mt-1">Verified documents will appear here after the Builtglory team shares them for this enquiry.</Text>
-            </View>
+            <EmptyStateCard
+              title="No shared documents yet"
+              body="Verified documents will appear here after the Builtglory team shares them for this enquiry."
+              icon="file-search"
+            />
           )}
           {docs.map((d) => (
             <DocCard
@@ -261,7 +201,7 @@ export function DocumentsSharedScreen() {
           <Icon name="shield-check" size={14} color="#10B981" />
           <Text className="text-[11.5px] text-ink-600 flex-1">All documents are legally verified by the Builtglory team.</Text>
         </View>
-        <Btn className="w-full mt-4" icon="credit-card" onPress={() => go('payment', { enquiry })}>Proceed to Token Payment</Btn>
+        <Btn className="w-full mt-4" icon="credit-card" onPress={() => go('payment', { enquiryId, enquiry, refresh: true })}>Proceed to Token Payment</Btn>
       </View>
     </Screen>
   );
@@ -271,9 +211,9 @@ export function DocumentsSharedScreen() {
 export function PaymentScreen() {
   const { go, completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
-  const enquiry = ctx?.enquiry as BuyEnquiry | undefined;
+  const { enquiry, enquiryId, loading, error: enquiryError, offline, reload, refresh, refreshing } = useBuyEnquiryResource(ctx);
   const [payments, setPayments] = useState<CustomerPayment[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
   const [method, setMethod] = useState('bank');
   const [status, setStatus] = useState<'idle' | 'processing'>('idle');
   const [copied, setCopied] = useState('');
@@ -296,38 +236,38 @@ export function PaymentScreen() {
         throw new Error('Payment configuration is incomplete.');
       }
       setPaymentConfig({ tokenAmount: nextTokenAmount, escrow: nextEscrow });
-      setError(null);
+      setPaymentError(null);
     } catch {
       setPaymentConfig(null);
-      setError('Token payment configuration is unavailable. Please retry or contact support.');
+      setPaymentError('Token payment configuration is unavailable. Please retry or contact support.');
     }
   }, []);
   const loadPayments = useCallback(async (silent = false) => {
     if (!authToken) return;
     try {
       setPayments(await listCustomerPayments(authToken, { type: 'token', limit: 5, sort: 'newest' }));
-      if (!silent) setError(null);
+      if (!silent) setPaymentError(null);
     } catch {
-      if (!silent) setError('Could not load payment history.');
+      if (!silent) setPaymentError('Could not load payment history.');
     }
   }, [authToken]);
   usePolling(() => loadPayments(true), 10000, Boolean(authToken));
   const pay = async () => {
     if (!authToken) {
-      setError('Please sign in again before creating a token payment.');
+      setPaymentError('Please sign in again before creating a token payment.');
       return;
     }
     const dealId = String((enquiry as any)?.dealId ?? (enquiry as any)?.deal?._id ?? (enquiry as any)?.deal?.id ?? '');
     if (!configReady) {
-      setError('Token payment configuration is unavailable. Please retry before paying.');
+      setPaymentError('Token payment configuration is unavailable. Please retry before paying.');
       return;
     }
     if (!dealId) {
-      setError('A sales deal is required before token payment can be created.');
+      setPaymentError('A sales deal is required before token payment can be created.');
       return;
     }
     setStatus('processing');
-    setError(null);
+    setPaymentError(null);
     try {
       const payment = await createTokenPayment(authToken, {
         dealId,
@@ -337,11 +277,11 @@ export function PaymentScreen() {
         idempotencyKey: `${dealId}-token-${Date.now()}`,
       });
       setStatus('idle');
-      completeTo(payment.status === 'failed' ? 'paymentFailure' : 'registrationDetails', { enquiry, payment });
+      completeTo(payment.status === 'failed' ? 'paymentFailure' : 'registrationDetails', { enquiryId, enquiry, payment, refresh: true });
     } catch {
       setStatus('idle');
-      setError('Could not create the token payment order.');
-      go('paymentFailure', { enquiry, reason: 'Payment order could not be created.' });
+      setPaymentError('Could not create the token payment order.');
+      go('paymentFailure', { enquiryId, enquiry, reason: 'Payment order could not be created.', refresh: true });
     }
   };
   useEffect(() => {
@@ -354,9 +294,12 @@ export function PaymentScreen() {
     { id: 'cheque', label: 'Cheque', icon: 'file-text' },
   ];
   return (
-    <Screen padBottom>
+    <Screen padBottom refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={back} title="Token Payment" />
-      {error && <ErrorCard message={error} onRetry={() => { loadPaymentConfig(); loadPayments(); }} />}
+      {loading && <LoadingBlock label="Loading deal and payment context..." />}
+      {offline && <OfflineCard onRetry={reload} />}
+      {enquiryError && <ErrorCard message={enquiryError} onRetry={reload} />}
+      {paymentError && <ErrorCard message={paymentError} onRetry={() => { loadPaymentConfig(); loadPayments(); }} />}
       <View className="px-4">
         <View className="rounded-card bg-brand-600 p-5 items-center mb-5">
           <Text className="text-[12px] text-white/70 uppercase tracking-wider">Token Amount</Text>
@@ -433,9 +376,13 @@ export function PaymentScreen() {
 // ─── B-15a Payment Failure ───────────────────────────────────
 export function PaymentFailureScreen() {
   const { go, ctx } = useNav();
+  const { enquiry, loading, error, offline, reload, refresh, refreshing } = useBuyEnquiryResource(ctx);
   const reason = ctx?.reason ?? (ctx?.payment as CustomerPayment | undefined)?.failureReason ?? 'Payment order failed or was declined.';
   return (
-    <Screen fill>
+    <Screen fill refreshing={refreshing} onRefresh={refresh}>
+      {loading && <LoadingBlock label="Loading payment context..." />}
+      {offline && <OfflineCard onRetry={reload} />}
+      {error && <ErrorCard message={error} onRetry={reload} />}
       <View className="flex-1 items-center justify-center px-6">
         <ShakeView trigger={reason}>
           <SuccessBurst icon="circle-x" color="#E11D48" bgClassName="bg-rose-50" />
@@ -445,8 +392,8 @@ export function PaymentFailureScreen() {
           Your token payment could not be confirmed. <Text className="text-ink-700 font-bold">Reason: {reason}</Text> No amount was deducted.
         </Text>
         <View className="mt-6 gap-2 w-full">
-          <Btn className="w-full" icon="rotate-cw" onPress={() => go('payment', { enquiry: ctx?.enquiry })}>Try Again</Btn>
-          <Btn variant="outline" className="w-full" icon="arrow-left-right" onPress={() => go('payment', { enquiry: ctx?.enquiry })}>Choose a Different Method</Btn>
+          <Btn className="w-full" icon="rotate-cw" onPress={() => go('payment', { enquiryId: enquiry?._id ?? enquiry?.id, enquiry, refresh: true })}>Try Again</Btn>
+          <Btn variant="outline" className="w-full" icon="arrow-left-right" onPress={() => go('payment', { enquiryId: enquiry?._id ?? enquiry?.id, enquiry, refresh: true })}>Choose a Different Method</Btn>
         </View>
         <Pressable onPress={() => go('help')} className="mt-4"><Text className="text-[13px] text-brand-600 font-semibold">Contact Support</Text></Pressable>
       </View>
@@ -459,7 +406,7 @@ export function RegistrationDetailsScreen() {
   const { resetTo, ctx } = useNav();
   useFlowCompletionBack();
   const [payment, setPayment] = useState<CustomerPayment | undefined>(ctx?.payment as CustomerPayment | undefined);
-  const { enquiry, loading, error, reload } = useEnquiryContext(ctx);
+  const { enquiry, loading, error, offline, reload, refresh, refreshing } = useBuyEnquiryResource(ctx);
   const { authToken } = useAppState();
   const dealId = String((enquiry as any)?.deal?._id ?? (enquiry as any)?.deal?.id ?? (enquiry as any)?.dealId ?? (payment as any)?.dealId ?? '');
   const refreshPayment = useCallback(async () => {
@@ -492,9 +439,10 @@ export function RegistrationDetailsScreen() {
   const appointmentLocation = appointment?.officeName || enquiry?.propertySnapshot?.location || 'Registration office pending';
   const appointmentAddress = appointment?.address || 'Address will appear once registration is scheduled.';
   return (
-    <Screen padBottom>
+    <Screen padBottom refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={() => resetTo('home')} title="Registration Details" />
       {loading && <LoadingBlock label="Loading registration context..." />}
+      {offline && <OfflineCard onRetry={reload} />}
       {error && <ErrorCard message={error} onRetry={reload} />}
       <View className="px-4">
         {!!payment && (
@@ -552,7 +500,7 @@ export function RegistrationDetailsScreen() {
 export function CancelEnquiryScreen() {
   const { resetTo, back, ctx } = useNav();
   const { authToken } = useAppState();
-  const { enquiry, enquiryId, loading, error, reload } = useEnquiryContext(ctx);
+  const { enquiry, enquiryId, loading, error, offline, reload, refresh, refreshing } = useBuyEnquiryResource(ctx);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -571,9 +519,10 @@ export function CancelEnquiryScreen() {
     }
   };
   return (
-    <Screen>
+    <Screen refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={back} title="Enquiry Detail" sub={enquiry?.referenceId ?? 'Buy enquiry'} />
       {loading && <LoadingBlock label="Loading enquiry..." />}
+      {offline && <OfflineCard onRetry={reload} />}
       {error && <ErrorCard message={error} onRetry={reload} />}
       {submitError && <ErrorCard message={submitError} />}
       <Sheet onClose={back} title="Cancel this enquiry?">

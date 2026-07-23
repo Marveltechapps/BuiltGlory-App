@@ -9,6 +9,11 @@ import { useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
 import { createAppFeedback, getPublicAppConfig } from '../api/customer';
 import { contentBody, contentMetaArray, contentMetaString, fallbackAboutContent, useContentItem } from '../content';
+import {
+  COMPANY_SUPPORT_PHONE_DISPLAY,
+  openCompanyCall,
+  openCompanyWhatsApp,
+} from '../config/companyContact';
 
 const STORE_FALLBACK_URL = Platform.OS === 'android' ? 'https://play.google.com/store/apps' : 'https://apps.apple.com';
 const RATING_LABELS = ['', 'Poor', 'Fair', 'Good', 'Great', 'Excellent'];
@@ -240,7 +245,8 @@ export function AboutUsScreen() {
             <View className="gap-2">
               <View className="flex-row items-start gap-2"><Icon name="map-pin" size={14} color="#1A6FFF" /><Text className="text-[12px] text-ink-700 flex-1">{contentMetaString(about, 'address', '123 Tech Park, OMR, Adyar, Chennai 600020, India')}</Text></View>
               <Pressable onPress={() => Linking.openURL(`mailto:${contentMetaString(about, 'supportEmail', 'support@builtglory.com')}`)} className="flex-row items-start gap-2"><Icon name="mail" size={14} color="#1A6FFF" /><Text className="text-[12px] text-brand-600 font-medium">{contentMetaString(about, 'supportEmail', 'support@builtglory.com')}</Text></Pressable>
-              <Pressable onPress={() => Linking.openURL(`tel:${contentMetaString(about, 'supportPhone', '+91 44 4000 8000').replace(/\s/g, '')}`)} className="flex-row items-start gap-2"><Icon name="phone" size={14} color="#1A6FFF" /><Text className="text-[12px] text-brand-600 font-medium">{contentMetaString(about, 'supportPhone', '+91 44 4000 8000')}</Text></Pressable>
+              <Pressable onPress={() => void openCompanyCall()} className="flex-row items-start gap-2"><Icon name="phone" size={14} color="#1A6FFF" /><Text className="text-[12px] text-brand-600 font-medium">{contentMetaString(about, 'supportPhone', COMPANY_SUPPORT_PHONE_DISPLAY)}</Text></Pressable>
+              <Pressable onPress={() => void openCompanyWhatsApp()} className="flex-row items-start gap-2"><Icon name="message-circle" size={14} color="#059669" /><Text className="text-[12px] text-emerald-700 font-medium">WhatsApp: {COMPANY_SUPPORT_PHONE_DISPLAY}</Text></Pressable>
             </View>
           </View>
           <Pressable onPress={() => go('customerSupport')} className="flex-row items-center justify-between p-4 border-t border-ink-100">

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Linking, View, Text, Pressable, ScrollView } from 'react-native';
+import { WebView } from 'react-native-webview';
 import Icon from '../components/Icon';
 import { Screen, TopBar, Badge, Chip, PhotoPlaceholder, Btn, Timeline } from '../components/shared';
 import { formatINR } from '../data/data';
@@ -19,9 +20,13 @@ import {
   SellRequest,
 } from '../api/customer';
 import { BUY_ENQUIRIES_CACHE_PREFIX, VISITS_CACHE_PREFIX, VisitsCache } from '../state/primaryTabCache';
+import { useBuyEnquiryResource } from '../hooks/useBuyEnquiryResource';
 import { usePolling } from '../hooks/usePolling';
 import { formatPaymentStatus } from '../utils/buyEnquiryStatus';
 import { sellDraftResumeContext, sellDraftResumeScreen, sellRequestPhotoUrls } from './sell';
+import { EmptyStateCard, ErrorCard, LoadingBlock, OfflineCard } from '../components/screenStates';
+import { isNetworkError, resourceErrorMessage } from '../utils/apiErrors';
+import { getSellerActivity, type SellerActivity } from '../api/customer';
 
 function apiMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -273,70 +278,78 @@ function buildBuyEnquiryTimelineSteps(enquiry?: BuyEnquiry | null) {
   }));
 }
 
-function ErrorCard({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return (
-    <View className="rounded-card border border-rose-100 bg-rose-50 p-3">
-      <Text className="text-[12px] text-rose-700">{message}</Text>
-      {onRetry && <Pressable onPress={onRetry} className="mt-2"><Text className="text-[12px] font-semibold text-rose-700">Retry</Text></Pressable>}
-    </View>
-  );
-}
-
-function LoadingBlock({ label }: { label: string }) {
-  return <View className="py-8 items-center"><Text className="text-[12px] text-ink-500">{label}</Text></View>;
-}
-
 // ─── P-05 Listing Detail / Seller Status Tracker ─────────────
 export function ListingDetailScreen() {
-  const { go, back, ctx } = useNav<{ sellRequestId?: string; sellRequest?: SellRequest }>();
+  const { go, back, ctx } = useNav<{ sellRequestId?: string; sellRequest?: SellRequest; refresh?: boolean }>();
   const { authToken } = useAppState();
   const [request, setRequest] = useState<SellRequest | null>(ctx.sellRequest || null);
+  const [activity, setActivity] = useState<SellerActivity | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [offline, setOffline] = useState(false);
   const sellRequestId = ctx.sellRequestId || requestId(ctx.sellRequest);
-  const load = async () => {
+  const load = async (silent = false) => {
     if (!authToken || !sellRequestId) {
       if (!request) setError('Listing context is missing.');
       return;
     }
-    setLoading(true);
-    setError('');
+    if (!silent) {
+      setLoading(true);
+      setError('');
+      setOffline(false);
+    }
     try {
-      setRequest(await getSellRequest(authToken, sellRequestId));
+      const [nextRequest, nextActivity] = await Promise.all([
+        getSellRequest(authToken, sellRequestId),
+        getSellerActivity(authToken, sellRequestId).catch(() => null),
+      ]);
+      setRequest(nextRequest);
+      setActivity(nextActivity);
     } catch (err) {
-      setError(apiMessage(err, 'Could not load listing status.'));
+      if (isNetworkError(err)) setOffline(true);
+      setError(resourceErrorMessage(err, 'Could not load listing status.'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+      setRefreshing(false);
     }
   };
   useEffect(() => {
-    load();
-  }, [authToken, sellRequestId]);
+    load(Boolean(ctx?.refresh));
+  }, [authToken, sellRequestId, ctx?.refresh]);
   const status = String(request?.status || (request?.isDraft ? 'draft' : 'submitted'));
+  const acquisitionStage = String(activity?.acquisition?.stage || '');
   const isDraftListing = request?.isDraft || status === 'draft';
   const coverPhoto = sellRequestPhotoUrls(request)[0];
   const continueDraft = () => {
     if (!request) return;
     go(sellDraftResumeScreen(request.draftStep), sellDraftResumeContext(request));
   };
-  const steps = [
-    { title: 'Submitted', state: request?.submittedAt || !request?.isDraft ? 'done' : 'future', date: request?.submittedAt ? new Date(request.submittedAt).toLocaleDateString() : undefined },
-    { title: 'Verification Call', state: ['new', 'under_review', 'changes_requested', 'approved', 'sold'].includes(status) ? 'current' : 'future', detail: status.replace(/_/g, ' ') },
-    { title: 'Document Verification', state: request?.documents?.some((doc) => doc.status === 'verified') ? 'done' : 'future', detail: `${request?.documents?.length || 0} document(s)` },
-    { title: 'Site Inspection', state: status === 'approved' ? 'current' : 'future' },
-    { title: 'Legal Verification', state: status === 'approved' ? 'current' : 'future' },
-    { title: 'Valuation', state: request?.sale?.salePrice ? 'done' : 'future' },
-    { title: 'Offer Sent', state: request?.sale?.salePrice ? 'current' : 'future' },
-    { title: 'Negotiation / Accepted', state: status === 'sold' ? 'done' : 'future' },
-    { title: 'Deal Confirmed', state: status === 'sold' ? 'done' : 'future' },
-    { title: 'Sold / Withdrawn', state: ['sold', 'withdrawn'].includes(status) ? 'done' : 'future' },
-  ] as const;
+  const stageHistory = Array.isArray(activity?.acquisition?.stageHistory) ? activity.acquisition.stageHistory : [];
+  const steps = stageHistory.length
+    ? stageHistory.map((entry: { to?: string; changedAt?: string; notes?: string }, index: number) => ({
+        title: String(entry.to || `Stage ${index + 1}`).replace(/_/g, ' '),
+        state: index < stageHistory.length - 1 ? 'done' : 'current',
+        date: entry.changedAt ? new Date(entry.changedAt).toLocaleDateString() : undefined,
+        detail: entry.notes || undefined,
+      }))
+    : [
+        { title: 'Submitted', state: request?.submittedAt || !request?.isDraft ? 'done' : 'future', date: request?.submittedAt ? new Date(request.submittedAt).toLocaleDateString() : undefined },
+        { title: 'Under Review', state: ['under_review', 'changes_requested', 'approved', 'active', 'negotiating', 'sold'].includes(status) ? 'current' : status === 'new' ? 'current' : 'future', detail: status.replace(/_/g, ' ') },
+        { title: 'Acquisition', state: acquisitionStage ? 'current' : 'future', detail: acquisitionStage ? acquisitionStage.replace(/_/g, ' ') : undefined },
+        { title: activity?.offer?.amount ? 'Offer Received' : 'Offer', state: activity?.offer?.amount ? 'current' : 'future', detail: activity?.offer?.amount ? formatINR(activity.offer.amount) : undefined },
+        { title: 'Sold / Withdrawn', state: ['sold', 'withdrawn'].includes(status) ? 'done' : 'future' },
+      ];
   return (
-    <Screen>
-      <TopBar onBack={back} title="Listing Status" sub="10-step pipeline" right={<Pressable onPress={() => go('editListing', { sellRequestId, sellRequest: request })}><Text className="text-brand-600 text-[13px] font-semibold">Edit</Text></Pressable>} />
+    <Screen refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load(true); }}>
+      <TopBar onBack={back} title="Listing Status" sub="Live pipeline" right={<Pressable onPress={() => go('editListing', { sellRequestId, sellRequest: request, refresh: true })}><Text className="text-brand-600 text-[13px] font-semibold">Edit</Text></Pressable>} />
       <View className="px-4 pb-6">
         {loading && <LoadingBlock label="Loading listing status..." />}
-        {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={load} /></View>}
+        {offline && <OfflineCard onRetry={() => load(false)} />}
+        {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={() => load(false)} /></View>}
+        {!loading && !error && !request && (
+          <EmptyStateCard title="Listing unavailable" body="This listing could not be loaded. Pull to refresh or open it again from My Listings." icon="tag" />
+        )}
         <View className="rounded-card border border-ink-200 overflow-hidden mb-5">
           <View className="flex-row gap-3 p-3">
             <PhotoPlaceholder tag={sellRequestId || request?.referenceId || 'listing'} width={72} height={72} imageUri={coverPhoto} className="rounded-md">
@@ -555,56 +568,33 @@ export function NoListingsScreen() {
 
 // ─── P-08 Enquiry Detail / Buyer Status Tracker ──────────────
 export function EnquiryDetailScreen() {
-  const { go, back, ctx } = useNav<{ enquiryId?: string; enquiry?: BuyEnquiry; refresh?: boolean }>();
+  const { back, ctx } = useNav<{ enquiryId?: string; dealId?: string; entityId?: string; entityType?: string; enquiry?: BuyEnquiry; refresh?: boolean }>();
   const { authToken, getCachedValue, setCachedValue } = useAppState();
-  const [enquiry, setEnquiry] = useState<BuyEnquiry | null>(ctx.enquiry || null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const {
+    enquiry,
+    enquiryId: activeEnquiryId,
+    loading,
+    refreshing,
+    error,
+    offline,
+    reload,
+    refresh,
+  } = useBuyEnquiryResource(ctx);
   const [canceling, setCanceling] = useState(false);
-  const activeEnquiryId = ctx.enquiryId || enquiryId(ctx.enquiry);
-  const load = async (silent = false) => {
-    if (!authToken || !activeEnquiryId) {
-      if (!enquiry) setError('Enquiry context is missing.');
-      return;
-    }
-    if (!silent) {
-      setLoading(true);
-      setError('');
-    }
-    try {
-      const latest = await getBuyEnquiry(authToken, activeEnquiryId);
-      setEnquiry(latest);
-      const cacheKey = `${BUY_ENQUIRIES_CACHE_PREFIX}:${authToken}`;
-      const cached = getCachedValue<BuyEnquiry[]>(cacheKey);
-      if (cached) {
-        const next = cached.map((item) => enquiryId(item) === activeEnquiryId ? latest : item);
-        setCachedValue(cacheKey, next);
-      }
-    } catch (err) {
-      if (!silent) setError(apiMessage(err, 'Could not load enquiry details.'));
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  };
-  useEffect(() => {
-    load(Boolean(ctx?.refresh));
-  }, [authToken, activeEnquiryId, ctx?.refresh]);
-  usePolling(() => load(true), 10000, Boolean(authToken && activeEnquiryId));
   const cancel = async () => {
     if (!authToken || !activeEnquiryId) return;
     setCanceling(true);
-    setError('');
     try {
       const updated = await cancelBuyEnquiry(authToken, activeEnquiryId, 'Cancelled from customer profile.');
-      setEnquiry(updated);
       const cacheKey = `${BUY_ENQUIRIES_CACHE_PREFIX}:${authToken}`;
       const cached = getCachedValue<BuyEnquiry[]>(cacheKey);
       if (cached) {
         const next = cached.map((item) => enquiryId(item) === activeEnquiryId ? updated : item);
         setCachedValue(cacheKey, next);
       }
+      await reload();
     } catch (err) {
-      setError(apiMessage(err, 'Could not cancel this enquiry.'));
+      // Error state handled by reload.
     } finally {
       setCanceling(false);
     }
@@ -617,12 +607,16 @@ export function EnquiryDetailScreen() {
   const displayStatus = getEnquiryDisplayStatus(enquiry);
   const steps = buildBuyEnquiryTimelineSteps(enquiry);
   return (
-    <Screen fill>
-      <TopBar onBack={back} title="Enquiry Status" sub="9-step pipeline" />
+    <Screen fill refreshing={refreshing} onRefresh={refresh}>
+      <TopBar onBack={back} title="Enquiry Status" sub="Live pipeline" />
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
         <View className="px-4">
           {loading && <LoadingBlock label="Loading enquiry details..." />}
-          {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={load} /></View>}
+          {offline && <OfflineCard onRetry={reload} />}
+          {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={reload} /></View>}
+          {!loading && !error && !enquiry && (
+            <EmptyStateCard title="Enquiry unavailable" body="This enquiry could not be loaded from Builtglory. Pull to refresh and try again." icon="inbox" />
+          )}
           <View className="rounded-card border border-ink-200 overflow-hidden bg-white mb-4">
             <View className="flex-row items-start gap-3 p-3.5">
               <PhotoPlaceholder tag={activeEnquiryId || 'enquiry'} width={72} height={72} className="rounded-md" />
@@ -689,18 +683,16 @@ export function NoEnquiriesScreen() {
 export function DocumentViewerScreen() {
   const { back, ctx } = useNav();
   const { authToken } = useAppState();
-  const doc = ctx?.doc || { name: 'Sale Deed' };
-  const [page, setPage] = useState(1);
-  const [zoom, setZoom] = useState(1);
+  const doc = ctx?.doc || { name: 'Document' };
   const [readUrl, setReadUrl] = useState(directDocumentUrlOf(doc));
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const totalPages = 6;
   const documentId = documentIdOf(doc);
   const loadReadUrl = async () => {
     const directUrl = directDocumentUrlOf(doc);
     if (directUrl) {
       setReadUrl(directUrl);
+      setError(null);
       return;
     }
     if (!authToken || !documentId) {
@@ -721,7 +713,7 @@ export function DocumentViewerScreen() {
   useEffect(() => {
     loadReadUrl();
   }, [authToken, documentId]);
-  const openDocument = async () => {
+  const openExternally = async () => {
     if (!readUrl) {
       await loadReadUrl();
       return;
@@ -734,11 +726,10 @@ export function DocumentViewerScreen() {
       <View className="px-3 py-2.5 flex-row items-center gap-2">
         <Pressable onPress={back} className="w-9 h-9 rounded-full items-center justify-center"><Icon name="arrow-left" size={20} color="white" /></Pressable>
         <View className="flex-1">
-          <Text className="text-[14px] font-semibold text-white" numberOfLines={1}>{doc.name}.pdf</Text>
-          <Text className="text-[10.5px] text-white/50">{readUrl ? 'Secure URL ready' : `Page ${page} of ${totalPages}`}</Text>
+          <Text className="text-[14px] font-semibold text-white" numberOfLines={1}>{doc.name}</Text>
+          <Text className="text-[10.5px] text-white/50">{loadingUrl ? 'Loading secure document...' : readUrl ? 'Live document preview' : 'Secure URL pending'}</Text>
         </View>
-        <Pressable onPress={openDocument} className="w-9 h-9 rounded-full items-center justify-center"><Icon name="download" size={17} color="white" /></Pressable>
-        <Pressable onPress={openDocument} className="w-9 h-9 rounded-full items-center justify-center"><Icon name="external-link" size={16} color="white" /></Pressable>
+        <Pressable onPress={openExternally} disabled={!readUrl && !documentId} className="w-9 h-9 rounded-full items-center justify-center"><Icon name="external-link" size={16} color="white" /></Pressable>
       </View>
       {!!error && (
         <View className="mx-4 mb-3 rounded-card border border-rose-300 bg-rose-500/10 p-3 flex-row items-center gap-2">
@@ -747,33 +738,26 @@ export function DocumentViewerScreen() {
           <Pressable onPress={loadReadUrl}><Text className="text-[11px] font-semibold text-white">Retry</Text></Pressable>
         </View>
       )}
-      <View className="flex-1 items-center justify-center p-4">
-        <View className="bg-white rounded shadow-2xl overflow-hidden" style={{ width: 280 * zoom }}>
-          <View className="p-6">
-            <View className="items-center mb-4">
-              <Text className="text-[11px] font-bold text-ink-900 uppercase tracking-wider">{doc.name}</Text>
-              <Text className="text-[8px] text-ink-400 mt-1">{loadingUrl ? 'Generating secure read URL...' : readUrl ? 'Builtglory · Secure document ready' : 'Builtglory · Document metadata'}</Text>
-            </View>
-            <View className="gap-1.5">
-              {Array.from({ length: 10 }).map((_, i) => (
-                <View key={i} className="h-1.5 rounded-full bg-ink-100" style={{ width: `${60 + ((i * 37) % 40)}%` }} />
-              ))}
-            </View>
-            <View className="my-4 h-20 rounded bg-ink-50 items-center justify-center"><Icon name="stamp" size={28} color="#CBD5E1" /></View>
-            <Pressable onPress={openDocument} className={`h-10 rounded-card items-center justify-center ${readUrl ? 'bg-brand-600' : 'bg-ink-200'}`}>
-              <Text className={`text-[12px] font-semibold ${readUrl ? 'text-white' : 'text-ink-600'}`}>{readUrl ? 'Open secure document' : loadingUrl ? 'Preparing document...' : 'Request secure URL'}</Text>
-            </Pressable>
+      <View className="flex-1 bg-white">
+        {loadingUrl && (
+          <View className="flex-1 items-center justify-center px-6">
+            <Text className="text-[13px] text-ink-500">Loading secure document...</Text>
           </View>
-        </View>
-      </View>
-      <View className="px-4 py-3 flex-row items-center justify-between border-t border-white/10">
-        <Pressable onPress={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="w-10 h-10 rounded-full bg-white/10 items-center justify-center"><Icon name="chevron-left" size={18} color="white" /></Pressable>
-        <View className="flex-row items-center gap-2">
-          <Pressable onPress={() => setZoom((z) => Math.max(0.8, z - 0.2))} className="w-10 h-10 rounded-full bg-white/10 items-center justify-center"><Icon name="zoom-out" size={16} color="white" /></Pressable>
-          <Text className="text-white/70 text-[12px] w-10 text-center">{Math.round(zoom * 100)}%</Text>
-          <Pressable onPress={() => setZoom((z) => Math.min(2, z + 0.2))} className="w-10 h-10 rounded-full bg-white/10 items-center justify-center"><Icon name="zoom-in" size={16} color="white" /></Pressable>
-        </View>
-        <Pressable onPress={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="w-10 h-10 rounded-full bg-white/10 items-center justify-center"><Icon name="chevron-right" size={18} color="white" /></Pressable>
+        )}
+        {!loadingUrl && readUrl ? (
+          <WebView
+            source={{ uri: readUrl }}
+            startInLoadingState
+            onError={() => setError('Could not render this document in the app. Use Open externally.')}
+          />
+        ) : null}
+        {!loadingUrl && !readUrl && !error ? (
+          <View className="flex-1 items-center justify-center px-6">
+            <Text className="text-[14px] font-semibold text-ink-900 text-center">Document preview unavailable</Text>
+            <Text className="text-[12px] text-ink-500 mt-2 text-center">Builtglory has not published a secure read URL for this file yet.</Text>
+            <Pressable onPress={loadReadUrl} className="mt-4 px-4 py-2 rounded-card bg-brand-600"><Text className="text-white font-semibold text-[13px]">Retry</Text></Pressable>
+          </View>
+        ) : null}
       </View>
     </View>
   );

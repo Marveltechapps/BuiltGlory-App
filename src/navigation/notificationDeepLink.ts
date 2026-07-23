@@ -137,12 +137,14 @@ export function resolveNotificationScreen(payload: NotificationDeepLinkPayload =
 export function buildNotificationNavContext(payload: NotificationDeepLinkPayload = {}) {
   const listingId = payload.listingId || payload.sellRequestId || '';
   const entityId = payload.entityId || '';
+  const entityType = String(payload.entityType || '').toLowerCase();
   return {
     notificationId: payload.inAppNotificationId || payload.notificationId || '',
-    listingId: listingId || (payload.entityType === 'sell_request' ? entityId : ''),
-    sellRequestId: payload.sellRequestId || listingId || (payload.entityType === 'sell_request' ? entityId : ''),
-    enquiryId: payload.enquiryId || (payload.entityType === 'buy_enquiry' ? entityId : ''),
-    dealId: payload.dealId || (payload.entityType === 'sales_deal' ? entityId : ''),
+    listingId: listingId || (entityType === 'sell_request' ? entityId : ''),
+    sellRequestId: payload.sellRequestId || listingId || (entityType === 'sell_request' ? entityId : ''),
+    enquiryId: payload.enquiryId || (entityType === 'buy_enquiry' ? entityId : ''),
+    dealId: payload.dealId || (entityType === 'sales_deal' ? entityId : ''),
+    visitId: entityType === 'visit' ? entityId : '',
     propertyId: payload.propertyId || '',
     entityId,
     entityType: payload.entityType || '',

@@ -15,6 +15,9 @@ import {
   uploadCustomerDocument,
 } from '../api/customer';
 import { ctxSellRequestId, sellDraftResumeContext, sellRequestIdOf, sellRequestTitle, useSellerActivityContext } from './sell';
+import { isNetworkError, resourceErrorMessage } from '../utils/apiErrors';
+import { findWorkflowDocument, sellerDealTimelineLabel } from '../utils/sellerDocuments';
+import { LoadingBlock, OfflineCard } from '../components/screenStates';
 
 function apiMessage(error: unknown, fallback = 'Something went wrong. Please try again.') {
   return error instanceof Error ? error.message : fallback;
@@ -43,28 +46,51 @@ function uploadMimeType(asset: ImagePicker.ImagePickerAsset) {
 function useSellRequestContext(ctx: any) {
   const { authToken } = useAppState();
   const [request, setRequest] = useState<SellRequest | null>(ctx?.sellRequest ?? ctx?.p ?? null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(ctx?.refresh || ctxSellRequestId(ctx)));
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [offline, setOffline] = useState(false);
   const sellRequestId = ctxSellRequestId(ctx);
-  const load = async (force = false) => {
-    if (!authToken || !sellRequestId) return;
-    setLoading(true);
-    setError('');
+  const load = async (silent = false) => {
+    if (!authToken) {
+      if (!silent) {
+        setLoading(false);
+        setError('Please sign in again to load this listing.');
+      }
+      return;
+    }
+    if (!sellRequestId) {
+      if (!silent) {
+        setLoading(false);
+        setError('Listing context is missing from this notification.');
+      }
+      return;
+    }
+    if (!silent) {
+      setLoading(true);
+      setError('');
+      setOffline(false);
+    }
     try {
       setRequest(await getSellRequest(authToken, sellRequestId));
+      setError('');
+      setOffline(false);
     } catch (e) {
-      setError(apiMessage(e, 'Unable to load sell request.'));
+      if (isNetworkError(e)) setOffline(true);
+      if (!silent) setError(resourceErrorMessage(e, 'Unable to load sell request.'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+      setRefreshing(false);
     }
-    if (force && __DEV__) {
-      console.log('Sell request refreshed from notification context');
-    }
+  };
+  const refresh = async () => {
+    setRefreshing(true);
+    await load(true);
   };
   useEffect(() => {
     load(Boolean(ctx?.refresh));
   }, [authToken, sellRequestId, ctx?.refresh]);
-  return { authToken, request, setRequest, loading, error, load, sellRequestId };
+  return { authToken, request, setRequest, loading, refreshing, error, offline, load: () => load(false), refresh, sellRequestId };
 }
 
 // ─── SL-09 Edit Listing ──────────────────────────────────────
@@ -204,7 +230,7 @@ export function DraftSuccessScreen() {
 // ─── SL-10 Verification & Inspection Status ──────────────────
 export function VerificationStatusScreen() {
   const { go, back, ctx } = useNav();
-  const { request, error, load } = useSellRequestContext(ctx);
+  const { request, loading, error, offline, load } = useSellRequestContext(ctx);
   const status = request?.status ?? 'draft';
   const hasChanges = status === 'changes_requested' || !!request?.changeRequests?.length || request?.documents?.some((doc) => doc.status === 'rejected' || doc.status === 'missing');
   const steps = [
@@ -219,6 +245,8 @@ export function VerificationStatusScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Verification Status" sub={sellRequestTitle(request)} />
+      {loading && <LoadingBlock label="Loading listing verification status..." />}
+      {offline && <OfflineCard onRetry={load} />}
       {!!error && <ErrorCard message={error} onRetry={load} />}
       <View className="px-4">
         <View className="rounded-card bg-ink-50 p-3 mb-5 flex-row items-center gap-3">
@@ -257,7 +285,7 @@ export function VerificationStatusScreen() {
 // ─── SL-11 Listing Re-upload ─────────────────────────────────
 export function ReuploadScreen() {
   const { back, ctx } = useNav();
-  const { authToken, request, setRequest, error, load, sellRequestId } = useSellRequestContext(ctx);
+  const { authToken, request, setRequest, loading, error, offline, load, sellRequestId } = useSellRequestContext(ctx);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [uploadedDocs, setUploadedDocs] = useState<Record<string, any>>({});
@@ -336,6 +364,8 @@ export function ReuploadScreen() {
   return (
     <Screen padBottom>
       <TopBar onBack={back} title="Re-upload Documents" />
+      {loading && <LoadingBlock label="Loading listing documents..." />}
+      {offline && <OfflineCard onRetry={load} />}
       {!!error && <ErrorCard message={error} onRetry={load} />}
       {!!saveError && <ErrorCard message={saveError} />}
       <View className="px-4">
@@ -373,7 +403,7 @@ export function ReuploadScreen() {
 // ─── SL-12 Offer Screen ───────────────────────────────────────
 export function OfferScreen() {
   const { go, back, ctx } = useNav();
-  const { activity, request, loading, error, load, sellRequestId } = useSellerActivityContext(ctx);
+  const { activity, request, loading, refreshing, error, offline, load, refresh, sellRequestId } = useSellerActivityContext(ctx);
   const initialExpirySeconds = Math.max(
     0,
     Math.floor((new Date((activity as any)?.offer?.expiresAt ?? 0).getTime() - Date.now()) / 1000),
@@ -394,10 +424,11 @@ export function OfferScreen() {
   const hh = Math.floor(secs / 3600), mm = Math.floor((secs % 3600) / 60), ss = secs % 60;
   const offerAmount = activity?.offer?.amount || request?.sale?.salePrice || request?.askingPrice || 0;
   return (
-    <Screen padBottom>
+    <Screen padBottom refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={back} title="Builtglory Offer" sub={sellRequestTitle(request)} />
+      {loading && <LoadingBlock label="Loading offer details..." />}
+      {offline && <OfflineCard onRetry={load} />}
       {!!error && <ErrorCard message={error} onRetry={load} />}
-      {loading && <View className="px-4"><Text className="text-[12px] text-ink-500 mb-3">Loading offer details...</Text></View>}
       <View className="px-4">
         <View className="rounded-card border-2 border-brand-600 p-5 items-center mb-4">
           <Text className="text-[12px] text-ink-500 uppercase tracking-wider">Our offer for your property</Text>
@@ -433,6 +464,7 @@ export function OfferScreen() {
 export function AcceptNegotiateScreen() {
   const { go, back, ctx } = useNav();
   const { authToken } = useAppState();
+  const { activity, request, loading, error: loadError, offline, load } = useSellerActivityContext(ctx);
   const mode = ctx?.mode || 'negotiate';
   const [counter, setCounter] = useState('');
   const [notes, setNotes] = useState('');
@@ -440,7 +472,17 @@ export function AcceptNegotiateScreen() {
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const offerAmount = Number(ctx?.offerAmount || ctx?.sellerActivity?.offer?.amount || ctx?.sellRequest?.sale?.salePrice || ctx?.sellRequest?.askingPrice || 0);
+  const offerAmount = Number(
+    ctx?.offerAmount
+    || activity?.offer?.amount
+    || ctx?.sellerActivity?.offer?.amount
+    || request?.sale?.salePrice
+    || request?.askingPrice
+    || ctx?.sellRequest?.sale?.salePrice
+    || ctx?.sellRequest?.askingPrice
+    || 0,
+  );
+  const counterAmount = Number(counter);
   const requestNegotiationCallback = async (decision: 'accept' | 'negotiate') => {
     const sellRequestId = ctxSellRequestId(ctx);
     if (!authToken || !sellRequestId) {
@@ -470,6 +512,9 @@ export function AcceptNegotiateScreen() {
     return (
       <Screen>
         <TopBar onBack={back} title="Accept Offer" />
+        {loading && <LoadingBlock label="Loading offer details..." />}
+        {offline && <OfflineCard onRetry={load} />}
+        {!!loadError && <ErrorCard message={loadError} onRetry={load} />}
         {!!error && <ErrorCard message={error} />}
         <View className="px-4">
           <View className="rounded-card border border-ink-200 p-5 items-center">
@@ -501,12 +546,12 @@ export function AcceptNegotiateScreen() {
             <View className="w-11 h-11 rounded-full bg-amber-100 items-center justify-center"><Icon name="loader-2" size={20} color="#D97706" /></View>
             <View className="flex-1">
               <Text className="text-[14px] font-semibold text-amber-900">Negotiation in progress</Text>
-              <Text className="text-[12px] text-amber-700">Your counter of {formatINR(Number(counter) || offerAmount)} was saved to the seller negotiation workflow.</Text>
+              <Text className="text-[12px] text-amber-700">Your counter of {formatINR(counterAmount)} was saved to the seller negotiation workflow.</Text>
             </View>
           </View>
           <View className="mt-4 rounded-card border border-ink-200">
             <View className="flex-row justify-between px-3 py-2.5"><Text className="text-[12px] text-ink-500">Builtglory offer</Text><Text className="text-[13px] font-semibold">{formatINR(offerAmount)}</Text></View>
-            <View className="flex-row justify-between px-3 py-2.5 border-t border-ink-100"><Text className="text-[12px] text-ink-500">Your counter</Text><Text className="text-[13px] font-semibold text-brand-600">{formatINR(Number(counter) || 8800000)}</Text></View>
+            <View className="flex-row justify-between px-3 py-2.5 border-t border-ink-100"><Text className="text-[12px] text-ink-500">Your counter</Text><Text className="text-[13px] font-semibold text-brand-600">{formatINR(counterAmount)}</Text></View>
           </View>
           <Btn variant="outline" className="w-full mt-5" onPress={() => go('sellerDashboard')}>Back to My Listings</Btn>
         </View>
@@ -517,6 +562,9 @@ export function AcceptNegotiateScreen() {
   return (
     <Screen padBottom>
       <TopBar onBack={back} title="Send Counter Offer" />
+      {loading && <LoadingBlock label="Loading offer details..." />}
+      {offline && <OfflineCard onRetry={load} />}
+      {!!loadError && <ErrorCard message={loadError} onRetry={load} />}
       {!!error && <ErrorCard message={error} />}
       <View className="px-4">
         <View className="rounded-card bg-ink-50 p-3 mb-4 flex-row justify-between items-center">
@@ -539,7 +587,8 @@ export function AcceptNegotiateScreen() {
 // ─── SL-14 Deal Confirmed + Bank Details ─────────────────────
 export function DealConfirmedScreen() {
   const { go, back, ctx } = useNav();
-  const { authToken, request } = useSellRequestContext(ctx);
+  const { authToken, request, loading, error: requestError, offline, load } = useSellRequestContext(ctx);
+  const { activity, loading: activityLoading, error: activityError, offline: activityOffline, load: loadActivity } = useSellerActivityContext(ctx);
   const [bank, setBank] = useState({ holder: '', name: '', acc: '', accConfirm: '', ifsc: '', branch: '', upi: '' });
   const [confirmedDeal, setConfirmedDeal] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -547,7 +596,16 @@ export function DealConfirmedScreen() {
   const set = (k: string, v: string) => setBank((b) => ({ ...b, [k]: v }));
   const accMatch = bank.acc && bank.acc === bank.accConfirm;
   const valid = bank.holder && bank.name && accMatch && bank.ifsc.length >= 6;
-  const offerAmount = Number(ctx?.offerAmount || request?.sale?.salePrice || request?.askingPrice || 0);
+  const offerAmount = Number(ctx?.offerAmount || activity?.offer?.amount || request?.sale?.salePrice || request?.askingPrice || 0);
+  const termSheet = findWorkflowDocument(activity, ['term sheet', 'sale agreement', 'sale_agreement']);
+  const timelineLabel = sellerDealTimelineLabel(activity);
+  const screenLoading = loading || activityLoading;
+  const screenError = requestError || activityError;
+  const screenOffline = offline || activityOffline;
+  const retryLoad = () => {
+    load();
+    loadActivity();
+  };
   const saveBankDetails = async () => {
     if (!authToken || !valid || saving) return;
     setSaving(true);
@@ -574,16 +632,25 @@ export function DealConfirmedScreen() {
   return (
     <Screen padBottom>
       <TopBar onBack={back} title="Deal Confirmed" />
+      {screenLoading && <LoadingBlock label="Loading deal details..." />}
+      {screenOffline && <OfflineCard onRetry={retryLoad} />}
+      {!!screenError && <ErrorCard message={screenError} onRetry={retryLoad} />}
       {!!error && <ErrorCard message={error} />}
       <View className="px-4">
         <View className="rounded-card border border-emerald-200 bg-emerald-50/40 p-4 mb-5">
           <View className="flex-row items-center gap-2 mb-3"><Icon name="circle-check" size={18} color="#10B981" /><Text className="text-[14px] font-bold text-emerald-800">Deal agreed</Text></View>
           <View className="gap-2.5">
             <View className="flex-row justify-between"><Text className="text-[12px] text-ink-500">Final agreed price</Text><Text className="text-[15px] font-bold">{formatINR(offerAmount)}</Text></View>
-            <Pressable className="flex-row items-center gap-2 px-3 py-2.5 rounded-card bg-white border border-ink-200" onPress={() => go('pdfViewer', { doc: { name: 'Term Sheet' }, from: 'dealConfirmed' })}>
-              <Icon name="file-text" size={16} color="#E11D48" /><Text className="flex-1 text-[13px] font-semibold">Term Sheet.pdf</Text><Icon name="chevron-right" size={15} color="#94A3B8" />
+            <Pressable
+              className={`flex-row items-center gap-2 px-3 py-2.5 rounded-card bg-white border border-ink-200 ${termSheet ? '' : 'opacity-60'}`}
+              disabled={!termSheet}
+              onPress={() => termSheet && go('pdfViewer', { doc: termSheet, from: 'dealConfirmed' })}
+            >
+              <Icon name="file-text" size={16} color="#E11D48" />
+              <Text className="flex-1 text-[13px] font-semibold">{termSheet?.name ?? 'Term sheet pending'}</Text>
+              <Icon name="chevron-right" size={15} color="#94A3B8" />
             </Pressable>
-            <View className="flex-row justify-between"><Text className="text-[12px] text-ink-500">Expected timeline</Text><Text className="text-[13px] font-semibold">21–30 days</Text></View>
+            <View className="flex-row justify-between"><Text className="text-[12px] text-ink-500">Expected timeline</Text><Text className="text-[13px] font-semibold">{timelineLabel}</Text></View>
           </View>
           {!confirmedDeal ? (
             <Btn className="w-full mt-3" size="sm" onPress={() => setConfirmedDeal(true)}>Confirm Deal</Btn>
@@ -619,14 +686,15 @@ export function DealConfirmedScreen() {
 // ─── SL-15 Payment Schedule ───────────────────────────────────
 export function PaymentScheduleScreen() {
   const { go, back, ctx } = useNav();
-  const { activity, loading, error, load } = useSellerActivityContext(ctx);
+  const { activity, loading, refreshing, error, offline, load, refresh } = useSellerActivityContext(ctx);
   const offerAmount = Number(ctx?.offerAmount || activity?.offer?.amount || ctx?.sellRequest?.sale?.salePrice || ctx?.sellRequest?.askingPrice || 0);
   const schedule = activity?.payoutSchedule ?? [];
   return (
-    <Screen padBottom>
+    <Screen padBottom refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={back} title="Payment Schedule" />
+      {loading && <LoadingBlock label="Loading payout schedule..." />}
+      {offline && <OfflineCard onRetry={load} />}
       {!!error && <ErrorCard message={error} onRetry={load} />}
-      {loading && <View className="px-4"><Text className="text-[12px] text-ink-500 mb-2">Loading payout schedule...</Text></View>}
       <View className="px-4 gap-3">
         {schedule.length ? schedule.map((item) => (
           <View key={item.key} className="rounded-card border border-ink-200 p-4">
@@ -658,7 +726,7 @@ export function PaymentScheduleScreen() {
 // ─── SL-16 Registration Appointment ──────────────────────────
 export function SellRegistrationScreen() {
   const { completeTo, back, ctx } = useNav();
-  const { activity, request, error, load } = useSellerActivityContext(ctx);
+  const { activity, request, loading, error, offline, load } = useSellerActivityContext(ctx);
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const appointment = activity?.registration?.appointment ?? ctx?.sellerActivity?.registration?.appointment;
   const docs = activity?.registration?.checklist ?? [];
@@ -671,6 +739,8 @@ export function SellRegistrationScreen() {
   return (
     <Screen padBottom>
       <TopBar onBack={back} title="Registration Appointment" />
+      {loading && <LoadingBlock label="Loading registration details..." />}
+      {offline && <OfflineCard onRetry={load} />}
       {!!error && <ErrorCard message={error} onRetry={load} />}
       <View className="px-4">
         <View className="rounded-card border border-ink-200 overflow-hidden mb-4">
@@ -721,18 +791,36 @@ export function SellRegistrationScreen() {
 export function DealCompleteScreen() {
   const { go, resetTo, ctx } = useNav();
   useFlowCompletionBack();
-  const { request } = useSellRequestContext(ctx);
+  const { request, loading, error, offline, load } = useSellRequestContext(ctx);
+  const { activity } = useSellerActivityContext(ctx);
+  const saleDeed = findWorkflowDocument(activity, ['sale deed', 'sale_deed']);
+  const payoutComplete = (activity?.payoutSchedule ?? []).length > 0
+    && (activity?.payoutSchedule ?? []).every((item) => item.status === 'paid');
+  const registrationComplete = activity?.registration?.status === 'completed'
+    || String((activity?.acquisition as Record<string, unknown> | null | undefined)?.stage ?? '') === 'acquired';
+  const paymentLabel = payoutComplete ? '✓ Received' : (activity?.payoutSchedule?.some((item) => item.status === 'paid') ? 'In progress' : 'Pending');
+  const registrationLabel = registrationComplete ? '✓ Completed' : (activity?.registration?.appointment ? 'Scheduled' : 'Pending');
   return (
     <Screen fill>
+      {loading && <LoadingBlock label="Loading deal summary..." />}
+      {offline && <OfflineCard onRetry={load} />}
+      {!!error && <ErrorCard message={error} onRetry={load} />}
       <View className="flex-1 items-center justify-center px-6">
         <SuccessBurst icon="party-popper" />
         <Text className="text-[22px] font-bold text-center">Your property has been sold</Text>
         <Text className="text-ink-500 mt-2 text-[13px] max-w-[250px] leading-relaxed text-center">Congratulations! The deal for {sellRequestTitle(request || ctx?.sellRequest)} is complete.</Text>
         <View className="mt-6 rounded-card border border-ink-200 w-full">
-          <FadeInView className="flex-row items-center justify-between px-4 py-3"><Text className="text-[13px] font-medium">Payment</Text><Text className="text-[12px] font-semibold text-emerald-700">✓ Received</Text></FadeInView>
-          <FadeInView delay={80} className="flex-row items-center justify-between px-4 py-3 border-t border-ink-100"><Text className="text-[13px] font-medium">Registration</Text><Text className="text-[12px] font-semibold text-emerald-700">✓ Completed</Text></FadeInView>
+          <FadeInView className="flex-row items-center justify-between px-4 py-3"><Text className="text-[13px] font-medium">Payment</Text><Text className={`text-[12px] font-semibold ${payoutComplete ? 'text-emerald-700' : 'text-ink-600'}`}>{paymentLabel}</Text></FadeInView>
+          <FadeInView delay={80} className="flex-row items-center justify-between px-4 py-3 border-t border-ink-100"><Text className="text-[13px] font-medium">Registration</Text><Text className={`text-[12px] font-semibold ${registrationComplete ? 'text-emerald-700' : 'text-ink-600'}`}>{registrationLabel}</Text></FadeInView>
         </View>
-        <Btn className="w-full mt-5" icon="file-text" onPress={() => go('pdfViewer', { doc: { name: 'Sale Deed' }, from: 'dealComplete' })}>Download Sale Deed</Btn>
+        <Btn
+          className="w-full mt-5"
+          icon="file-text"
+          disabled={!saleDeed}
+          onPress={() => saleDeed && go('pdfViewer', { doc: saleDeed, from: 'dealComplete' })}
+        >
+          {saleDeed ? `View ${saleDeed.name}` : 'Sale deed pending'}
+        </Btn>
         <Btn className="w-full mt-3" onPress={() => resetTo('home')}>Go to Home</Btn>
         <Pressable onPress={() => go('help')} className="mt-4"><Text className="text-[13px] text-brand-600 font-semibold">Contact Builtglory</Text></Pressable>
       </View>
@@ -743,11 +831,13 @@ export function DealCompleteScreen() {
 // ─── SL-18 Rejected Listing ───────────────────────────────────
 export function RejectedListingScreen() {
   const { go, back, ctx } = useNav();
-  const { request, error, load } = useSellRequestContext(ctx);
+  const { request, loading, error, offline, load } = useSellRequestContext(ctx);
   const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <Screen>
       <TopBar onBack={back} title="Listing Rejected" />
+      {loading && <LoadingBlock label="Loading listing details..." />}
+      {offline && <OfflineCard onRetry={load} />}
       {!!error && <ErrorCard message={error} onRetry={load} />}
       <View className="px-4">
         <View className="rounded-card border border-rose-200 bg-rose-50/50 p-4 flex-row gap-3 mb-4">

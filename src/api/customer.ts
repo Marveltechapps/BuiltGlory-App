@@ -132,14 +132,29 @@ export async function customerApiRequest<T>(path: string, options: RequestOption
   if (options.body) headers['Content-Type'] = 'application/json';
   if (options.accessToken) headers.Authorization = `Bearer ${options.accessToken}`;
 
-  const response = await fetch(`${CUSTOMER_API_BASE_URL}${path}`, {
-    method: options.method ?? 'GET',
+  const url = `${CUSTOMER_API_BASE_URL}${path}`;
+  const method = options.method ?? 'GET';
+  console.log('[BuiltGlory API] request', {
+    url,
+    method,
+    body: options.body ?? null,
+    hasAuth: Boolean(options.accessToken),
+  });
+
+  const response = await fetch(url, {
+    method,
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
 
   const { payload, rawText } = await readResponseBody<ApiEnvelope<T> | ApiErrorPayload>(response);
   if (!response.ok) {
+    console.warn('[BuiltGlory API] error', {
+      url,
+      method,
+      status: response.status,
+      body: payload ?? rawText,
+    });
     if (response.status === 401 && options.accessToken && !options.skipAuthRefresh) {
       const refreshedSession = await refreshAccessToken(options.accessToken);
       if (refreshedSession?.accessToken && refreshedSession.accessToken !== options.accessToken) {
@@ -152,6 +167,13 @@ export async function customerApiRequest<T>(path: string, options: RequestOption
     }
     throw readApiError(response, payload, rawText);
   }
+
+  console.log('[BuiltGlory API] response', {
+    url,
+    method,
+    status: response.status,
+    body: payload,
+  });
 
   if (!payload) return null as T;
   return (payload as ApiEnvelope<T>).data;
@@ -336,6 +358,15 @@ export type PublicAppConfig = {
       chequeInstructions?: string[];
     } | null;
   };
+  support?: {
+    supportPhone?: string;
+    supportPhoneE164?: string;
+    whatsappNumber?: string;
+    whatsappUrl?: string;
+    telUrl?: string;
+    supportWhatsAppMessage?: string;
+    phone?: string;
+  };
 };
 
 export async function getPublicAppConfig() {
@@ -505,10 +536,20 @@ function mapCustomerNotification(raw: RawEntity): CustomerNotification {
   };
 }
 
-export async function listCustomerNotifications(accessToken: string, params: { limit?: number; status?: string } = {}) {
-  return customerApiRequest<RawEntity[]>(`/me/notifications${buildQuery({ limit: params.limit ?? 50, status: params.status })}`, {
+export async function listCustomerNotifications(accessToken: string, params: { limit?: number; status?: string; isRead?: boolean } = {}) {
+  return customerApiRequest<RawEntity[]>(`/me/notifications${buildQuery({
+    limit: params.limit ?? 50,
+    status: params.status,
+    isRead: params.isRead === undefined ? undefined : params.isRead,
+  })}`, {
     accessToken,
   }).then((items) => (items ?? []).map(mapCustomerNotification));
+}
+
+export async function getCustomerNotificationUnreadCount(accessToken: string) {
+  return customerApiRequest<{ count: number }>('/me/notifications/unread-count', {
+    accessToken,
+  }).then((result) => Number(result?.count ?? 0));
 }
 
 export async function markCustomerNotificationsRead(accessToken: string, ids?: string[]) {

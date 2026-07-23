@@ -58,9 +58,9 @@ module.exports = ({ config }) => {
         },
       },
       adaptiveIcon: {
+        // Solid white plate; foreground is cropped logo mark on transparent (see scripts/generate-brand-icons.mjs).
         backgroundColor: '#FFFFFF',
         foregroundImage: './assets/android-icon-foreground.png',
-        backgroundImage: './assets/android-icon-background.png',
         monochromeImage: './assets/android-icon-monochrome.png',
       },
       predictiveBackGestureEnabled: false,
@@ -114,6 +114,8 @@ module.exports = ({ config }) => {
       EXPO_PUBLIC_API_URL: apiUrl,
       EXPO_PUBLIC_PRODUCTION_API_URL: productionApiUrl,
       EXPO_PUBLIC_API_PORT: process.env.EXPO_PUBLIC_API_PORT?.trim(),
+      EXPO_PUBLIC_COMPANY_SUPPORT_PHONE: process.env.EXPO_PUBLIC_COMPANY_SUPPORT_PHONE?.trim(),
+      EXPO_PUBLIC_COMPANY_WHATSAPP_NUMBER: process.env.EXPO_PUBLIC_COMPANY_WHATSAPP_NUMBER?.trim(),
     },
   };
 

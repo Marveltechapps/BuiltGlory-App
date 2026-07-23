@@ -20,6 +20,7 @@ import {
 import { PROPERTY_TYPES, SPECS, formatINR, Property } from '../data/data';
 import { useAppState } from '../state/AppState';
 import { useFlowCompletionBack, useNav } from '../navigation/useNav';
+import { useBuyEnquiryResource, propertyIdFromEnquiry } from '../hooks/useBuyEnquiryResource';
 import { contentMetaArray, useContentItem } from '../content';
 import { BUY_TYPE_COUNTS_CACHE_KEY, FAVORITES_LIST_CACHE_PREFIX, TYPE_TO_BACKEND, buildBuyTypeCounts, propertyMediaImages, toBackendType } from '../state/primaryTabCache';
 import {
@@ -38,6 +39,7 @@ import {
   VisitAvailability,
   VisitAvailabilitySlot,
 } from '../api/customer';
+import { isNetworkError, resourceErrorMessage } from '../utils/apiErrors';
 
 type DisplayProperty = Property & { backend?: CustomerProperty };
 type PropertyTypeVisibilityConfig = {
@@ -259,32 +261,45 @@ function usePropertyDetailFromContext(ctx: any) {
   const propertyId = ctx?.propertyId || propertyIdOf(initial);
   const [property, setProperty] = useState<DisplayProperty>(initial);
   const [loading, setLoading] = useState(!!propertyId);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => {
+  const [offline, setOffline] = useState(false);
+  const load = useCallback(async (silent = false) => {
     if (!propertyId) {
       setLoading(false);
       setError('Property details are unavailable. Go back and open the listing again.');
       return;
     }
-    setLoading(true);
-    setError(null);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+      setOffline(false);
+    }
     try {
       setProperty(toDisplayProperty(await getCustomerProperty(propertyId)));
-    } catch {
-      setError('Could not load the latest property information.');
+      setError(null);
+      setOffline(false);
+    } catch (err) {
+      if (isNetworkError(err)) setOffline(true);
+      if (!silent) setError(resourceErrorMessage(err, 'Could not load the latest property information.'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+      setRefreshing(false);
     }
   }, [propertyId]);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    await load(true);
+  }, [load]);
   useEffect(() => {
     setProperty((ctx?.p as DisplayProperty | undefined) || EMPTY_PROPERTY);
     setLoading(!!propertyId);
     setError(null);
   }, [propertyId]);
   useEffect(() => {
-    load();
-  }, [load]);
-  return { property, propertyId, loading, error, reload: load };
+    load(Boolean(ctx?.refresh));
+  }, [load, ctx?.refresh]);
+  return { property, propertyId, loading, refreshing, error, offline, reload: () => load(false), refresh };
 }
 
 // ─── PropertyTypeGrid ──────────────────────────────────────────
@@ -1325,8 +1340,11 @@ export function EnquirySuccessScreen() {
 export function VisitCalendarScreen() {
   const { completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
-  const { property: p, propertyId, loading, error, reload } = usePropertyDetailFromContext(ctx);
-  const enquiry = ctx?.enquiry as BuyEnquiry | undefined;
+  const enquiryResource = useBuyEnquiryResource(ctx);
+  const resolvedPropertyId = String(ctx?.propertyId || propertyIdFromEnquiry(enquiryResource.enquiry) || '').trim();
+  const propertyCtx = { ...ctx, propertyId: resolvedPropertyId, enquiry: enquiryResource.enquiry, enquiryId: enquiryResource.enquiryId };
+  const { property: p, propertyId, loading, error, reload } = usePropertyDetailFromContext(propertyCtx);
+  const enquiry = enquiryResource.enquiry;
   const dateOptions = useMemo(() => nextDateOptions(14), []);
   const [visitDate, setVisitDate] = useState(dateOptions[1]?.iso ?? dateOptions[0]?.iso ?? '');
   const [slot, setSlot] = useState('11:00 AM');
@@ -1356,7 +1374,7 @@ export function VisitCalendarScreen() {
     try {
       const visit = await createVisit(authToken, {
         propertyId,
-        enquiryId: String(enquiry?._id ?? enquiry?.id ?? '') || undefined,
+        enquiryId: String(enquiryResource.enquiryId || enquiry?._id || enquiry?.id || '') || undefined,
         visitDate,
         visitTime: slot,
         visitType: 'physical',
@@ -1369,8 +1387,11 @@ export function VisitCalendarScreen() {
     }
   };
   return (
-    <Screen>
+    <Screen refreshing={enquiryResource.refreshing} onRefresh={enquiryResource.refresh}>
       <TopBar onBack={back} title="Schedule a visit" sub="Upcoming dates" />
+      {enquiryResource.loading && <LoadingBlock label="Loading enquiry context..." />}
+      {enquiryResource.offline && <ErrorCard message="You appear to be offline. Pull to refresh when your connection returns." onRetry={enquiryResource.reload} />}
+      {enquiryResource.error && <ErrorCard message={enquiryResource.error} onRetry={enquiryResource.reload} />}
       {loading && <LoadingBlock label="Loading property context..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
       {submitError && <ErrorCard message={submitError} />}
@@ -1451,7 +1472,7 @@ export function VisitConfirmationScreen() {
               </View>
             </View>
             <View className="pt-2 border-t border-ink-100">
-              <View><Text className="text-[10px] text-ink-500">Reference</Text><Text className="text-[12px] font-semibold">{visit?.referenceId ?? '#VG-4821'}</Text></View>
+              <View><Text className="text-[10px] text-ink-500">Reference</Text><Text className="text-[12px] font-semibold">{visit?.referenceId ?? 'Pending'}</Text></View>
             </View>
           </View>
         </View>

@@ -7,6 +7,11 @@ import { useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
 import { fallbackFaqContent, useContentSection, useFaqTopics } from '../content';
 import {
+  COMPANY_SUPPORT_PHONE_DISPLAY,
+  openCompanyCall,
+  openCompanyWhatsApp,
+} from '../config/companyContact';
+import {
   createCallbackRequest,
   createSupportTicket,
   cancelAccountDeletion,
@@ -18,9 +23,6 @@ import {
   requestAccountDeletion,
   SupportTicket,
 } from '../api/customer';
-
-const APP_SETTINGS_KEY = 'builtglory.appSettings';
-const SUPPORT_PHONE = '+914440008000';
 
 type NotificationChannel = 'sms' | 'whatsapp' | 'email' | 'push' | 'in_app';
 type NotificationPrefs = Record<NotificationChannel, { transactional: boolean; marketing: boolean }>;
@@ -664,8 +666,13 @@ export function CustomerSupportScreen() {
         </View>
         <Pressable onPress={() => go('callUs')} className="w-full flex-row items-center gap-3 p-4 rounded-card border border-ink-200">
           <View className="w-11 h-11 rounded-full bg-ink-100 items-center justify-center"><Icon name="phone-call" size={20} color="#334155" /></View>
-          <View className="flex-1"><Text className="text-[14px] font-semibold">Call Us</Text><Text className="text-[11.5px] text-ink-500">Speak to an advisor</Text></View>
+          <View className="flex-1"><Text className="text-[14px] font-semibold">Call Us</Text><Text className="text-[11.5px] text-ink-500">{COMPANY_SUPPORT_PHONE_DISPLAY}</Text></View>
           <Icon name="chevron-right" size={16} color="#94A3B8" />
+        </Pressable>
+        <Pressable onPress={() => void openCompanyWhatsApp()} className="w-full flex-row items-center gap-3 p-4 rounded-card border border-emerald-200 bg-emerald-50">
+          <View className="w-11 h-11 rounded-full bg-emerald-600 items-center justify-center"><Icon name="message-circle" size={20} color="white" /></View>
+          <View className="flex-1"><Text className="text-[14px] font-semibold text-emerald-800">WhatsApp Support</Text><Text className="text-[11.5px] text-emerald-700">Chat with BuiltGlory team</Text></View>
+          <Icon name="chevron-right" size={16} color="#059669" />
         </Pressable>
       </View>
     </Screen>
@@ -708,11 +715,16 @@ export function CallUsScreen() {
       <View className="px-4">
         <View className="rounded-card border border-ink-200 p-5 items-center mb-4">
           <View className="w-16 h-16 rounded-full bg-brand-50 items-center justify-center mb-3"><Icon name="phone-call" size={28} color="#1A6FFF" /></View>
-          <Pressable onPress={() => Linking.openURL(`tel:${SUPPORT_PHONE}`)}><Text className="text-[22px] font-bold text-brand-600">+91 44 4000 8000</Text></Pressable>
+          <Pressable onPress={() => void openCompanyCall()}><Text className="text-[22px] font-bold text-brand-600">{COMPANY_SUPPORT_PHONE_DISPLAY}</Text></Pressable>
           <Text className="text-[12px] text-ink-500 mt-1">Builtglory Customer Care</Text>
-          <Pressable onPress={() => Linking.openURL(`tel:${SUPPORT_PHONE}`)} className="flex-row items-center gap-2 h-11 px-6 mt-4 rounded-xl bg-brand-600">
-            <Icon name="phone" size={16} color="white" /><Text className="text-white font-semibold text-[14px]">Tap to Call</Text>
-          </Pressable>
+          <View className="flex-row flex-wrap gap-2 mt-4 justify-center">
+            <Pressable onPress={() => void openCompanyCall()} className="flex-row items-center gap-2 h-11 px-6 rounded-xl bg-brand-600">
+              <Icon name="phone" size={16} color="white" /><Text className="text-white font-semibold text-[14px]">Tap to Call</Text>
+            </Pressable>
+            <Pressable onPress={() => void openCompanyWhatsApp()} className="flex-row items-center gap-2 h-11 px-6 rounded-xl bg-emerald-600">
+              <Icon name="message-circle" size={16} color="white" /><Text className="text-white font-semibold text-[14px]">WhatsApp</Text>
+            </Pressable>
+          </View>
         </View>
         <View className="rounded-card bg-ink-50 p-3.5 items-center">
           <Text className="text-[12px] text-ink-500">Office hours</Text>

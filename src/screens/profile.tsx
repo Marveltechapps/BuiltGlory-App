@@ -3,10 +3,10 @@ import { Image, View, Text, Pressable } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Icon from '../components/Icon';
 import { BrandLogo } from '../components/BrandLogo';
-import { Screen, TopBar, Field, Input, Badge, PhotoPlaceholder, Sheet, UserAvatar, FadeInView, EmptyState } from '../components/shared';
+import { Screen, TopBar, Field, Input, Badge, PhotoPlaceholder, Sheet, UserAvatar } from '../components/shared';
 import { formatINR } from '../data/data';
 import { useNav } from '../navigation/useNav';
-import { navigateFromNotification } from '../navigation/navigationRef';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAppState } from '../state/AppState';
 import {
   BuyEnquiry,
@@ -15,16 +15,11 @@ import {
   CustomerProfile,
   CustomerProperty,
   getFavoriteProperties,
-  listCustomerNotifications,
-  markCustomerNotificationsRead,
-  markCustomerNotificationRead,
-  deleteCustomerNotification,
   listBuyEnquiries,
   listCustomerProperties,
   listSellRequests,
   SellRequest,
   uploadCustomerDocument,
-  type CustomerNotification,
 } from '../api/customer';
 import {
   contentBody,
@@ -40,13 +35,12 @@ import {
   BUY_ENQUIRIES_CACHE_PREFIX,
   HistoryCache,
   HOME_UNREAD_CACHE_PREFIX,
-  NOTIFICATIONS_CACHE_PREFIX,
-  NotificationsCache,
   PROFILE_SUMMARY_CACHE_PREFIX,
   ProfileStats,
   ProfileSummaryCache,
   SELL_LISTINGS_CACHE_PREFIX,
 } from '../state/primaryTabCache';
+import { refreshUnreadNotificationCount } from '../utils/notificationSync';
 
 function apiMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -108,7 +102,7 @@ function InlineError({ message, onRetry }: { message: string; onRetry?: () => vo
 // ─── P-01 Profile ────────────────────────────────────────────
 export function ProfileScreen() {
   const { go, resetTo } = useNav();
-  const { authToken, currentUser, getCachedValue, setCachedValue, refreshCurrentUser, signOut } = useAppState();
+  const { authToken, currentUser, getCachedValue, setCachedValue, clearCachedValue, refreshCurrentUser, signOut } = useAppState();
   const [unread, setUnread] = useState(0);
   const [showLogout, setShowLogout] = useState(false);
   const [stats, setStats] = useState<ProfileStats>({ saved: 0, enquiries: 0, listed: 0 });
@@ -149,15 +143,12 @@ export function ProfileScreen() {
         listSellRequests(authToken, { limit: 50, sort: 'newest' }),
       ]);
       const nextStats = { saved: favorites.length, enquiries: enquiries.length, listed: listings.length };
-      const notifications = await listCustomerNotifications(authToken, { limit: 50 });
-      const nextUnread = notifications.filter((notification) => notification.unread).length;
+      const nextUnread = await refreshUnreadNotificationCount(authToken, { getCachedValue, setCachedValue, clearCachedValue });
       setStats(nextStats);
       setUnread(nextUnread);
       setCachedValue<ProfileSummaryCache>(cacheKey, { stats: nextStats, unread: nextUnread });
       setCachedValue(`${BUY_ENQUIRIES_CACHE_PREFIX}:${authToken}`, enquiries);
       setCachedValue(`${SELL_LISTINGS_CACHE_PREFIX}:${authToken}`, listings);
-      setCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`, notifications);
-      setCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`, nextUnread);
     } catch (err) {
       setError(apiMessage(err, 'Could not load profile summary.'));
     } finally {
@@ -168,6 +159,13 @@ export function ProfileScreen() {
   useEffect(() => {
     loadProfileSummary();
   }, [authToken]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!authToken) return;
+      void refreshUnreadNotificationCount(authToken, { getCachedValue, setCachedValue, clearCachedValue }).then(setUnread);
+    }, [authToken, clearCachedValue, getCachedValue, setCachedValue]),
+  );
 
   return (
     <Screen padBottom>
@@ -278,7 +276,10 @@ export function ProfileEditScreen() {
     setSaved(false);
     setError('');
     try {
-      await updateProfile({ name: name.trim(), email: email.trim() || null });
+      await updateProfile({
+        name: name.trim(),
+        ...(email.trim() ? { email: email.trim().toLowerCase() } : {}),
+      });
       setSaved(true);
       setTimeout(() => back(), 700);
     } catch (err) {
@@ -386,173 +387,7 @@ export function ProfileEditScreen() {
 }
 
 // ─── G-01 Notifications ──────────────────────────────────────
-export function NotificationsScreen() {
-  const { back } = useNav();
-  const { authToken, getCachedValue, setCachedValue, clearCachedValue } = useAppState();
-  const [notifications, setNotifications] = useState<CustomerNotification[]>([]);
-  const [locallyRead, setLocallyRead] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
-
-  const loadNotifications = async (force = false) => {
-    if (!authToken) {
-      setError('Please sign in again to load notifications.');
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-    const cacheKey = `${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`;
-    const cached = getCachedValue<NotificationsCache>(cacheKey);
-    if (cached && !force) {
-      setNotifications(cached);
-      setLoading(false);
-      setError('');
-      return;
-    }
-    if (force) setRefreshing(true);
-    else setLoading(true);
-    setError('');
-    try {
-      const nextNotifications = await listCustomerNotifications(authToken, { limit: 50 });
-      setNotifications(nextNotifications);
-      setCachedValue(cacheKey, nextNotifications);
-      setCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`, nextNotifications.filter((notification) => notification.unread).length);
-    } catch (err) {
-      setError(apiMessage(err, 'Could not load notifications.'));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
-  useEffect(() => {
-    loadNotifications();
-  }, [authToken]);
-
-  const groups = notifications.reduce<Record<string, CustomerNotification[]>>((acc, notification) => {
-    const date = new Date(notification.createdAt);
-    const today = new Date().toDateString();
-    const yesterday = new Date(Date.now() - 86400000).toDateString();
-    const key = date.toDateString() === today ? 'Today' : date.toDateString() === yesterday ? 'Yesterday' : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-    acc[key] = acc[key] ?? [];
-    acc[key].push(notification);
-    return acc;
-  }, {});
-
-  const openNotification = async (notification: CustomerNotification) => {
-    if (notification.unread && authToken) {
-      setLocallyRead((prev) => new Set(prev).add(notification.id));
-      try {
-        await markCustomerNotificationRead(authToken, notification.id);
-        clearCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`);
-        clearCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`);
-      } catch {
-        // Continue navigation even if read sync fails.
-      }
-    }
-    navigateFromNotification({
-      type: notification.notificationType || notification.event,
-      notificationType: notification.notificationType || notification.event,
-      screen: notification.screen || undefined,
-      screenKey: notification.screenKey || notification.deepLink || undefined,
-      deepLink: notification.deepLink || notification.screenKey || undefined,
-      listingId: notification.listingId || undefined,
-      enquiryId: notification.enquiryId || undefined,
-      dealId: notification.dealId || undefined,
-      propertyId: notification.propertyId || undefined,
-      entityId: notification.entityId || undefined,
-      entityType: notification.entityType || undefined,
-      image: notification.image || undefined,
-      createdAt: notification.createdAt || undefined,
-      notificationId: notification.id,
-    });
-  };
-
-  const removeNotification = async (notificationId: string) => {
-    setNotifications((prev) => prev.filter((item) => item.id !== notificationId));
-    if (!authToken) return;
-    try {
-      await deleteCustomerNotification(authToken, notificationId);
-      clearCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`);
-      clearCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`);
-    } catch {
-      setError('Could not delete notification. Pull to refresh and try again.');
-      loadNotifications(true);
-    }
-  };
-
-  const markAllRead = async () => {
-    const ids = notifications.filter((notification) => notification.unread).map((notification) => notification.id);
-    setLocallyRead(new Set(notifications.map((notification) => notification.id)));
-    if (!authToken || ids.length === 0) return;
-    try {
-      const nextNotifications = await markCustomerNotificationsRead(authToken, ids);
-      setNotifications(nextNotifications);
-      setCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`, nextNotifications);
-      setCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`, nextNotifications.filter((notification) => notification.unread).length);
-      setLocallyRead(new Set());
-    } catch {
-      setError('Marked read locally. Sync will retry when notifications reload.');
-    }
-  };
-
-  const timeLabel = (iso: string) => {
-    const elapsed = Date.now() - new Date(iso).getTime();
-    if (elapsed < 3600000) return `${Math.max(1, Math.round(elapsed / 60000))}m`;
-    if (elapsed < 86400000) return `${Math.round(elapsed / 3600000)}h`;
-    return `${Math.round(elapsed / 86400000)}d`;
-  };
-
-  const iconFor = (notification: CustomerNotification) => {
-    if (notification.event.includes('visit')) return 'calendar';
-    if (notification.event.includes('price')) return 'trending-up';
-    if (notification.event.includes('verified')) return 'badge-check';
-    return 'message-circle';
-  };
-
-  return (
-    <Screen refreshing={refreshing} onRefresh={() => loadNotifications(true)}>
-      <TopBar onBack={back} title="Notifications" right={<Pressable onPress={markAllRead}><Text className="text-brand-600 text-[12px] font-semibold">Mark all read</Text></Pressable>} />
-      <View className="px-4 gap-4">
-        {loading && <Text className="text-[12px] text-ink-500">Loading notifications...</Text>}
-        {!!error && <InlineError message={error} onRetry={loadNotifications} />}
-        {!loading && !error && notifications.length === 0 && (
-          <EmptyState icon="bell" title="No notifications yet" body="Property updates and visit alerts will appear here." />
-        )}
-        {Object.entries(groups).map(([day, items]) => (
-          <View key={day}>
-            <Text className="text-[11px] font-semibold text-ink-500 uppercase tracking-wider mb-2">{day}</Text>
-            <View className="gap-2">
-              {items.map((it) => {
-                const unread = it.unread && !locallyRead.has(it.id);
-                return (
-                <FadeInView key={it.id} className={`p-3 rounded-card border flex-row gap-3 ${unread ? 'border-brand-200 bg-brand-50/40' : 'border-ink-200'}`}>
-                  <Pressable onPress={() => openNotification(it)} className="flex-row gap-3 flex-1">
-                    <View className="w-9 h-9 rounded-full bg-brand-50 items-center justify-center"><Icon name={iconFor(it)} size={16} color="#1A6FFF" /></View>
-                    <View className="flex-1">
-                      <View className="flex-row items-start justify-between gap-2">
-                        <Text className="text-[13px] font-semibold flex-1">{it.title}</Text>
-                        {unread && <View className="w-2 h-2 rounded-full bg-brand-600 mt-1.5" />}
-                      </View>
-                      <Text className="text-[11.5px] text-ink-500 mt-0.5">{it.body}</Text>
-                    </View>
-                  </Pressable>
-                  <View className="items-end justify-between">
-                    <Text className="text-[10.5px] text-ink-400">{timeLabel(it.createdAt)}</Text>
-                    <Pressable onPress={() => removeNotification(it.id)} hitSlop={8}>
-                      <Text className="text-[10px] text-ink-400">Delete</Text>
-                    </Pressable>
-                  </View>
-                </FadeInView>
-              )})}
-            </View>
-          </View>
-        ))}
-      </View>
-    </Screen>
-  );
-}
+export { NotificationsScreen } from '../notifications';
 
 // ─── Extras: Offers, NewsInsights, GeneralInfo, HelpFeedback, MyEnquiries (history) ──
 export function OffersScreen() {

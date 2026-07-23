@@ -28,10 +28,17 @@ import {
   updateSellRequest,
   uploadCustomerDocument,
 } from '../api/customer';
+import { isNetworkError, resourceErrorMessage } from '../utils/apiErrors';
 
 export const sellRequestIdOf = (request?: SellRequest | null) => request?._id ?? request?.id ?? '';
 export const ctxSellRequestId = (ctx?: any) =>
-  String(ctx?.sellRequestId ?? ctx?.listingId ?? sellRequestIdOf(ctx?.sellRequest) ?? '').trim();
+  String(
+    ctx?.sellRequestId
+    ?? ctx?.listingId
+    ?? sellRequestIdOf(ctx?.sellRequest)
+    ?? (String(ctx?.entityType || '').toLowerCase() === 'sell_request' ? ctx?.entityId : '')
+    ?? '',
+  ).trim();
 
 export const SELL_DRAFT_STEP_SCREENS: Record<number, string> = {
   1: 'sellIntent',
@@ -132,28 +139,65 @@ export function useSellerActivityContext(ctx: any) {
   const sellRequestId = ctxSellRequestId(ctx);
   const [activity, setActivity] = useState<SellerActivity | null>(ctx?.sellerActivity ?? null);
   const [request, setRequest] = useState<SellRequest | null>(ctx?.sellRequest ?? ctx?.p ?? null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(ctx?.refresh || sellRequestId));
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [offline, setOffline] = useState(false);
   const load = async (silent = false) => {
-    if (!authToken || !sellRequestId) return;
+    if (!authToken) {
+      if (!silent) {
+        setLoading(false);
+        setError('Please sign in again to load this listing.');
+      }
+      return;
+    }
+    if (!sellRequestId) {
+      if (!silent) {
+        setLoading(false);
+        setError('Listing context is missing from this notification.');
+      }
+      return;
+    }
     if (!silent) {
       setLoading(true);
       setError('');
+      setOffline(false);
     }
     try {
       const next = await getSellerActivity(authToken, sellRequestId);
       setActivity(next);
       setRequest(next.sellRequest);
+      setError('');
+      setOffline(false);
     } catch (e) {
-      if (!silent) setError(apiMessage(e, 'Unable to load seller activity.'));
+      if (isNetworkError(e)) setOffline(true);
+      if (!silent) setError(resourceErrorMessage(e, 'Unable to load seller activity.'));
     } finally {
       if (!silent) setLoading(false);
+      setRefreshing(false);
     }
+  };
+  const refresh = async () => {
+    setRefreshing(true);
+    await load(true);
   };
   useEffect(() => {
     load(Boolean(ctx?.refresh));
   }, [authToken, sellRequestId, ctx?.refresh]);
-  return { authToken, sellRequestId, activity, request, setActivity, setRequest, loading, error, load };
+  return {
+    authToken,
+    sellRequestId,
+    activity,
+    request,
+    setActivity,
+    setRequest,
+    loading,
+    refreshing,
+    error,
+    offline,
+    load: () => load(false),
+    refresh,
+  };
 }
 
 // ─── SL-01 Property Type Selection (Sell) ────────────────────

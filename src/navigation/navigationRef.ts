@@ -5,6 +5,7 @@ import {
   NotificationDeepLinkPayload,
   resolveNotificationScreen,
 } from './notificationDeepLink';
+import { resolveNotificationTab } from './notificationScreenTab';
 
 export const navigationRef = createNavigationContainerRef<any>();
 
@@ -58,11 +59,12 @@ export function navigateFromNotification(raw: NotificationDeepLinkPayload | Reco
     return;
   }
 
+  const tab = resolveNotificationTab(screen);
   navigationRef.dispatch(
     CommonActions.navigate({
       name: 'MainTabs',
       params: {
-        screen: 'HomeTab',
+        screen: tab,
         params: {
           screen,
           params: { ctx },

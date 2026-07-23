@@ -8,14 +8,12 @@ import {
   isRemotePushSupported,
   registerForFcmPushNotificationsAsync,
 } from '../services/notifications';
-import {
-  markCustomerNotificationRead,
-  registerCustomerPushToken,
-} from '../api/customer';
+import { removeCustomerPushToken, registerCustomerPushToken, type CustomerProfile } from '../api/customer';
 import { extractNotificationPayload } from '../navigation/notificationDeepLink';
 import { flushPendingNotificationNavigation, navigateFromNotification } from '../navigation/navigationRef';
 import { useAppState } from '../state/AppState';
-import { HOME_UNREAD_CACHE_PREFIX, NOTIFICATIONS_CACHE_PREFIX } from '../state/primaryTabCache';
+import { NOTIFICATIONS_CACHE_PREFIX } from '../state/primaryTabCache';
+import { markOneNotificationReadRemote, refreshUnreadNotificationCount } from '../utils/notificationSync';
 
 export type PushNotificationBanner = {
   title: string;
@@ -23,33 +21,50 @@ export type PushNotificationBanner = {
   payload: Record<string, unknown>;
 };
 
+function pushPreferenceEnabled(user: CustomerProfile | null | undefined) {
+  const notificationPreferences = user?.notificationPreferences as
+    | Partial<Record<'sms' | 'whatsapp' | 'email' | 'push' | 'in_app', { transactional?: boolean; marketing?: boolean }>>
+    | undefined;
+  const pushPrefs = notificationPreferences?.push;
+  if (!pushPrefs) return true;
+  return pushPrefs.transactional !== false;
+}
+
 export function usePushNotifications() {
-  const { authToken, clearCachedValue } = useAppState();
+  const { authToken, currentUser, clearCachedValue, getCachedValue, setCachedValue } = useAppState();
   const lastRegisteredTokenRef = useRef<string | null>(null);
   const handledColdStartRef = useRef(false);
   const [banner, setBanner] = useState<PushNotificationBanner | null>(null);
+  const cacheApi = useCallback(
+    () => ({ getCachedValue, setCachedValue, clearCachedValue }),
+    [clearCachedValue, getCachedValue, setCachedValue],
+  );
 
   const syncToken = useCallback(async (force = false) => {
-    if (!authToken) return;
+    if (!authToken || !pushPreferenceEnabled(currentUser)) {
+      if (authToken && lastRegisteredTokenRef.current) {
+        await removeCustomerPushToken(authToken, lastRegisteredTokenRef.current).catch(() => undefined);
+        lastRegisteredTokenRef.current = null;
+      }
+      return;
+    }
     const token = await registerForFcmPushNotificationsAsync();
     if (!token) return;
     if (!force && lastRegisteredTokenRef.current === token) return;
     await registerCustomerPushToken(authToken, { token, platform: getPushPlatform() });
     lastRegisteredTokenRef.current = token;
-  }, [authToken]);
+  }, [authToken, currentUser]);
 
   const markNotificationRead = useCallback(async (payload: ReturnType<typeof extractNotificationPayload>) => {
     if (!authToken || !payload.notificationId) return;
     try {
-      await markCustomerNotificationRead(authToken, payload.notificationId);
-      clearCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`);
-      clearCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`);
+      await markOneNotificationReadRemote(authToken, payload.notificationId, cacheApi());
     } catch (error) {
       if (__DEV__) {
         console.warn('Failed to mark notification read:', error);
       }
     }
-  }, [authToken, clearCachedValue]);
+  }, [authToken, cacheApi]);
 
   const handleNotificationOpen = useCallback(async (response: NotificationResponse) => {
     const content = response.notification.request.content;
@@ -86,18 +101,19 @@ export function usePushNotifications() {
     syncToken().catch((error) => {
       if (__DEV__) console.warn('Failed to register FCM push token:', error);
     });
-  }, [authToken, syncToken]);
+  }, [authToken, currentUser, syncToken]);
 
   useEffect(() => {
     if (!isRemotePushSupported()) return;
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active' && authToken) {
         syncToken(true).catch(() => undefined);
+        void refreshUnreadNotificationCount(authToken, cacheApi());
         flushPendingNotificationNavigation();
       }
     });
     return () => sub.remove();
-  }, [authToken, syncToken]);
+  }, [authToken, cacheApi, syncToken]);
 
   useEffect(() => {
     if (!isRemotePushSupported() || handledColdStartRef.current) return;
@@ -124,7 +140,7 @@ export function usePushNotifications() {
         });
         if (authToken) {
           clearCachedValue(`${NOTIFICATIONS_CACHE_PREFIX}:${authToken}`);
-          clearCachedValue(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`);
+          void refreshUnreadNotificationCount(authToken, cacheApi());
         }
       },
       onNotificationResponse: (response) => {
@@ -132,7 +148,7 @@ export function usePushNotifications() {
         handleNotificationOpen(response).catch(() => undefined);
       },
     });
-  }, [authToken, clearCachedValue, handleNotificationOpen]);
+  }, [authToken, cacheApi, clearCachedValue, handleNotificationOpen]);
 
   return {
     banner,

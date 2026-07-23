@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FAQS, FAQ_TOPICS } from './data/data';
 import { getPublicContent, listPublicContent, PublicContentItem } from './api/customer';
+import { COMPANY_SUPPORT_PHONE_DISPLAY, COMPANY_WHATSAPP_DIGITS } from './config/companyContact';
 import { useAppState } from './state/AppState';
 import { contentItemCacheKey } from './state/primaryTabCache';
 
@@ -51,7 +52,8 @@ export const fallbackAboutContent: PublicContentItem = {
     version: '1.0.0',
     copyright: '2026 Builtglory',
     supportEmail: 'support@builtglory.com',
-    supportPhone: '+91 44 4000 8000',
+    supportPhone: COMPANY_SUPPORT_PHONE_DISPLAY,
+    supportWhatsApp: COMPANY_WHATSAPP_DIGITS,
     address: '123 Tech Park, OMR, Adyar, Chennai 600020, India',
     tagline: 'Simplifying real estate, one transaction at a time',
     steps: [

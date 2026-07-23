@@ -14,8 +14,10 @@ import {
 import { PROPERTY_TYPES, formatINR, formatPropertyTypeLabel } from '../data/data';
 import { useAppState } from '../state/AppState';
 import { useNav } from '../navigation/useNav';
+import { useFocusEffect } from '@react-navigation/native';
 import { ChatSocket, createChatSocket } from '../realtime/chatSocket';
 import { contentMetaArray, fallbackFaqContent, useContentItem, useContentSection } from '../content';
+import { openCompanyCall, openCompanyWhatsApp } from '../config/companyContact';
 import {
   addSupportTicketResponse,
   CreateSupportTicketInput,
@@ -26,7 +28,6 @@ import {
   clearRecentSearches,
   getSupportTicket,
   listRecentSearches,
-  listCustomerNotifications,
   listCustomerProperties,
   listSupportTickets,
   listTrendingSearches,
@@ -42,6 +43,7 @@ import {
   UPCOMING_LIST_CACHE_KEY,
   toDisplayProperty,
 } from '../state/primaryTabCache';
+import { refreshUnreadNotificationCount } from '../utils/notificationSync';
 
 type TourStepId = 'search' | 'actions' | 'favorite' | 'nav';
 type TourTarget = { top: number; left: number; width: number; height: number };
@@ -129,7 +131,7 @@ function CompactLoadingBlock({ label }: { label: string }) {
 // ─── H-01 Home ───────────────────────────────────────────────
 export function HomeScreen() {
   const { go } = useNav();
-  const { authToken, currentUser, fav, getCachedValue, setCachedValue, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
+  const { authToken, currentUser, fav, getCachedValue, setCachedValue, clearCachedValue, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
   const [unread, setUnread] = useState(0);
   const [coach, setCoach] = useState(false);
   const [featured, setFeatured] = useState<DisplayProperty[]>([]);
@@ -218,26 +220,25 @@ export function HomeScreen() {
       setRefreshingFeed(false);
     }
   }, [getCachedValue, loadFavoriteIds, setCachedValue]);
-  const loadUnreadCount = useCallback(async () => {
+  const loadUnreadCount = useCallback(async (force = false) => {
     if (!authToken) {
       setUnread(0);
       return;
     }
-    const cacheKey = `${HOME_UNREAD_CACHE_PREFIX}:${authToken}`;
-    const cached = getCachedValue<number>(cacheKey);
-    if (cached !== null) {
-      setUnread(cached);
-      return;
+    if (!force) {
+      const cached = getCachedValue<number>(`${HOME_UNREAD_CACHE_PREFIX}:${authToken}`);
+      if (cached !== null) {
+        setUnread(cached);
+        return;
+      }
     }
     try {
-      const notifications = await listCustomerNotifications(authToken, { limit: 50 });
-      const nextUnread = notifications.filter((notification) => notification.unread).length;
+      const nextUnread = await refreshUnreadNotificationCount(authToken, { getCachedValue, setCachedValue, clearCachedValue });
       setUnread(nextUnread);
-      setCachedValue(cacheKey, nextUnread);
     } catch {
       setUnread(0);
     }
-  }, [authToken, getCachedValue, setCachedValue]);
+  }, [authToken, clearCachedValue, getCachedValue, setCachedValue]);
   const handleFavorite = useCallback(async (id: string) => {
     try {
       await toggleRemoteFavorite(id);
@@ -292,6 +293,12 @@ export function HomeScreen() {
   useEffect(() => {
     loadUnreadCount();
   }, [loadUnreadCount]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadUnreadCount(true);
+    }, [loadUnreadCount]),
+  );
   useEffect(() => {
     if (!coach) return;
     const t = setTimeout(() => {
@@ -1074,23 +1081,33 @@ export function HelpScreen() {
             <ErrorCard message="Please sign in again to create callbacks or support tickets." />
           </View>
         )}
-        <View className="flex-row gap-2 mb-6">
+        <View className="flex-row gap-2 mb-6 flex-wrap">
           <Pressable
             onPress={() => {
               go('supportTickets');
             }}
-            className="flex-1 p-3 rounded-card border border-ink-200 items-center"
+            className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center"
           >
             <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="message-circle" size={18} color="#1A6FFF" /></View>
             <Text className="text-[12.5px] font-semibold">Support ticket</Text>
             <Text className="text-[10px] text-ink-500">Tracked</Text>
           </Pressable>
-          <Pressable onPress={() => setCallbackModal(true)} className="flex-1 p-3 rounded-card border border-ink-200 items-center">
+          <Pressable onPress={() => setCallbackModal(true)} className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center">
             <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="phone-call" size={18} color="#1A6FFF" /></View>
             <Text className="text-[12.5px] font-semibold">Callback</Text>
             <Text className="text-[10px] text-ink-500">Free</Text>
           </Pressable>
-          <Pressable onPress={handleEmailSupport} className="flex-1 p-3 rounded-card border border-ink-200 items-center">
+          <Pressable onPress={() => void openCompanyCall()} className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center">
+            <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="phone" size={18} color="#1A6FFF" /></View>
+            <Text className="text-[12.5px] font-semibold">Call</Text>
+            <Text className="text-[10px] text-ink-500">Now</Text>
+          </Pressable>
+          <Pressable onPress={() => void openCompanyWhatsApp()} className="flex-1 min-w-[30%] p-3 rounded-card border border-emerald-200 bg-emerald-50 items-center">
+            <View className="w-10 h-10 rounded-full bg-emerald-100 items-center justify-center mb-2"><Icon name="message-circle" size={18} color="#059669" /></View>
+            <Text className="text-[12.5px] font-semibold text-emerald-800">WhatsApp</Text>
+            <Text className="text-[10px] text-emerald-700">Chat</Text>
+          </Pressable>
+          <Pressable onPress={handleEmailSupport} className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center">
             <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="mail" size={18} color="#1A6FFF" /></View>
             <Text className="text-[12.5px] font-semibold">Email</Text>
             <Text className="text-[10px] text-ink-500">24 hrs</Text>
