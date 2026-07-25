@@ -1,16 +1,3 @@
-const { withAndroidManifest, AndroidConfig } = require('@expo/config-plugins');
-
-/** Expo stores android.usesCleartextTraffic in app config but does not apply it to release AndroidManifest.xml. */
-function withHttpCleartextTraffic(config) {
-  if (!config.android?.usesCleartextTraffic) return config;
-
-  return withAndroidManifest(config, (modConfig) => {
-    const application = AndroidConfig.Manifest.getMainApplicationOrThrow(modConfig.modResults);
-    application.$['android:usesCleartextTraffic'] = 'true';
-    return modConfig;
-  });
-}
-
 /** @type {import('expo/config').ExpoConfig} */
 module.exports = ({ config }) => {
   const apiUrl = process.env.EXPO_PUBLIC_API_URL?.trim() || process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
@@ -28,9 +15,11 @@ module.exports = ({ config }) => {
     orientation: 'default',
     icon: './assets/icon.png',
     splash: {
-      image: './assets/splash-icon.png',
+      // Square mark fits Android 12+ circular splash; wordmark is shown on the JS splash screen.
+      image: './assets/logo-mark.png',
       resizeMode: 'contain',
       backgroundColor: '#FFFFFF',
+      imageWidth: 200,
     },
     userInterfaceStyle: 'light',
     ios: {
@@ -74,9 +63,10 @@ module.exports = ({ config }) => {
         'expo-splash-screen',
         {
           backgroundColor: '#FFFFFF',
-          image: './assets/splash-icon.png',
+          // Centered square mark — Android crops splash icons to a circle (~192dp).
+          image: './assets/logo-mark.png',
           resizeMode: 'contain',
-          imageWidth: 300,
+          imageWidth: 200,
         },
       ],
       [
@@ -105,6 +95,15 @@ module.exports = ({ config }) => {
           contactsPermission: 'Allow BuiltGlory to access your contacts when you choose to share a property.',
         },
       ],
+      [
+        'expo-build-properties',
+        {
+          android: {
+            usesCleartextTraffic: Boolean(usesHttpApi),
+          },
+        },
+      ],
+      './plugins/withCleartextTraffic',
     ],
     extra: {
       ...(config?.extra ?? {}),
@@ -119,5 +118,5 @@ module.exports = ({ config }) => {
     },
   };
 
-  return withHttpCleartextTraffic(expoConfig);
+  return expoConfig;
 };

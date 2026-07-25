@@ -11,8 +11,8 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://192.168.1.12:3000",
-        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://192.168.1.12:3000"
+        "EXPO_PUBLIC_API_URL": "http://10.122.252.20:5001",
+        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://10.122.252.20:5001"
       }
     },
     "preview": {
@@ -21,15 +21,15 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://192.168.1.12:3000",
-        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://192.168.1.12:3000"
+        "EXPO_PUBLIC_API_URL": "http://10.122.252.20:5001",
+        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://10.122.252.20:5001"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://192.168.1.12:3000",
-        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://192.168.1.12:3000"
+        "EXPO_PUBLIC_API_URL": "http://10.122.252.20:5001",
+        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://10.122.252.20:5001"
       }
     }
   },

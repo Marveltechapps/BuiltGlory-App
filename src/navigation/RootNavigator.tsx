@@ -81,7 +81,15 @@ function AppTabBar({ state, navigation }: BottomTabBarProps) {
         profilePhoto={profilePhoto}
         onNav={(tab) => {
           const routeName = TAB_ROUTE_BY_ID[tab];
-          if (routeName && routeName !== activeRoute.name) navigation.navigate(routeName);
+          if (!routeName) return;
+          const rootScreen = TAB_ROOT_BY_ROUTE[routeName];
+          // Always land on the tab root. ProfileTab can retain nested screens
+          // (e.g. listingDetail titled "Listing Status"); switching tabs must
+          // not restore those instead of Profile/My Account.
+          navigation.navigate(routeName, {
+            screen: rootScreen,
+            params: { ctx: {} },
+          });
         }}
       />
     </View>

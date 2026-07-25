@@ -34,9 +34,9 @@ Copy `.env.example` to `.env` and set:
 
 | Variable | When used | Description |
 |----------|-----------|-------------|
-| `EXPO_PUBLIC_API_URL` | **Development** (`__DEV__`) | Backend origin for local dev (e.g. `http://192.168.1.8:3002`). Use your PC's **LAN IP**, not `localhost`. `/api/v1` is appended automatically. |
+| `EXPO_PUBLIC_API_URL` | **Development** (`__DEV__`) | Backend origin for local dev (e.g. `http://192.168.1.8:5001`). Use your PC's **LAN IP**, not `localhost`. `/api/v1` is appended automatically. |
 | `EXPO_PUBLIC_PRODUCTION_API_URL` | **Preview / production APK** | HTTPS production API (default: `https://api.builtglory.com`). Used when `__DEV__` is false. |
-| `EXPO_PUBLIC_API_PORT` | Optional dev fallback | Port when inferring URL from the Expo dev server host (default: `3002`). |
+| `EXPO_PUBLIC_API_PORT` | Optional dev fallback | Port when inferring URL from the Expo dev server host (default: `5001`). |
 
 Legacy alias: `EXPO_PUBLIC_API_BASE_URL` is still read if `EXPO_PUBLIC_API_URL` is unset.
 
@@ -49,10 +49,10 @@ Legacy alias: `EXPO_PUBLIC_API_BASE_URL` is still read if `EXPO_PUBLIC_API_URL` 
 
 ### Find your LAN IP
 
-1. Start the backend: `cd Backend-V1 && npm run dev` (default port **3002** in this monorepo).
+1. Start the backend: `cd Backend-V1 && npm run dev` (default port **5001** in this monorepo).
 2. Note your computer's Wi-Fi IP (Windows: `ipconfig`, macOS/Linux: `ifconfig` or `ip addr`).
-3. Set in `.env`: `EXPO_PUBLIC_API_URL=http://YOUR_LAN_IP:3002`
-4. Ensure phone and PC are on the **same Wi-Fi** and Windows Firewall allows inbound TCP on port 3002.
+3. Set in `.env`: `EXPO_PUBLIC_API_URL=http://YOUR_LAN_IP:5001`
+4. Ensure phone and PC are on the **same Wi-Fi** and Windows Firewall allows inbound TCP on port 5001.
 5. Restart Expo (`npm start`) or rebuild the native app after changing `.env`.
 
 ### EAS builds

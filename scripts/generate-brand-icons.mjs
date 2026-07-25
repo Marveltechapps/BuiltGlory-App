@@ -17,18 +17,13 @@ const TRANSPARENT = { r: 0, g: 0, b: 0, alpha: 0 };
 const PAPER_THRESHOLD = 220;
 
 /**
- * Crop brand-logo.png down to the house/handshake mark and make paper transparent.
- * Source is a wide paper mockup; without this, Android shows a grey rectangle icon.
+ * Find non-empty content bounds. Treat near-white (and optional transparent) as empty.
  */
-async function extractLogoMark() {
-  const { data, info } = await sharp(SOURCE).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const { width, height, channels } = info;
-
+function contentBounds(data, width, height, channels, { paperThreshold = null } = {}) {
   let minX = width;
   let minY = height;
   let maxX = 0;
   let maxY = 0;
-  const out = Buffer.from(data);
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
@@ -36,10 +31,10 @@ async function extractLogoMark() {
       const r = data[i];
       const g = data[i + 1];
       const b = data[i + 2];
-      const isPaper = r >= PAPER_THRESHOLD && g >= PAPER_THRESHOLD && b >= PAPER_THRESHOLD;
+      const a = channels > 3 ? data[i + 3] : 255;
 
-      if (isPaper) {
-        out[i + 3] = 0;
+      if (a < 10) continue;
+      if (paperThreshold != null && r >= paperThreshold && g >= paperThreshold && b >= paperThreshold) {
         continue;
       }
 
@@ -51,47 +46,92 @@ async function extractLogoMark() {
   }
 
   if (maxX < minX || maxY < minY) {
-    throw new Error('Could not find logo mark in brand-logo.png');
+    throw new Error('Could not find non-empty content bounds');
   }
 
-  const pad = Math.round(Math.max(maxX - minX, maxY - minY) * 0.06);
-  const left = Math.max(0, minX - pad);
-  const top = Math.max(0, minY - pad);
-  const cropWidth = Math.min(width - left, maxX - minX + 1 + pad * 2);
-  const cropHeight = Math.min(height - top, maxY - minY + 1 + pad * 2);
-  const side = Math.max(cropWidth, cropHeight);
+  return {
+    left: minX,
+    top: minY,
+    width: maxX - minX + 1,
+    height: maxY - minY + 1,
+  };
+}
 
-  const cropped = await sharp(out, { raw: { width, height, channels } })
-    .extract({ left, top, width: cropWidth, height: cropHeight })
+/** Place a PNG buffer centered on a square canvas with equal padding. */
+async function centerOnSquare(inputPng, { padRatio = 0.06, background = TRANSPARENT } = {}) {
+  const { data, info } = await sharp(inputPng).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const bounds = contentBounds(data, info.width, info.height, info.channels);
+  const cropped = await sharp(inputPng)
+    .extract(bounds)
     .png()
     .toBuffer();
 
-  // Center the mark on a transparent square (do not clip when pad exceeds image edges).
+  const side = Math.max(bounds.width, bounds.height) + Math.round(Math.max(bounds.width, bounds.height) * padRatio) * 2;
+
   return sharp({
     create: {
       width: side,
       height: side,
       channels: 4,
-      background: TRANSPARENT,
+      background,
     },
   })
     .composite([
       {
         input: cropped,
-        left: Math.round((side - cropWidth) / 2),
-        top: Math.round((side - cropHeight) / 2),
+        left: Math.round((side - bounds.width) / 2),
+        top: Math.round((side - bounds.height) / 2),
       },
     ])
     .png()
     .toBuffer();
 }
 
-async function composeLandscapeSplash(size, { logoWidthRatio = 0.78, background = TRANSPARENT, format = 'png' } = {}) {
-  const meta = await sharp(SPLASH_SOURCE).metadata();
+/**
+ * Crop brand-logo.png down to the house/handshake mark and make paper transparent.
+ * Source is a wide paper mockup; without this, Android shows a grey rectangle icon.
+ * Content is tightly cropped then centered on a transparent square (equal padding).
+ */
+async function extractLogoMark() {
+  const { data, info } = await sharp(SOURCE).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  const out = Buffer.from(data);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * channels;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const isPaper = r >= PAPER_THRESHOLD && g >= PAPER_THRESHOLD && b >= PAPER_THRESHOLD;
+      if (isPaper) out[i + 3] = 0;
+    }
+  }
+
+  const transparentPng = await sharp(out, { raw: { width, height, channels } }).png().toBuffer();
+  return centerOnSquare(transparentPng, { padRatio: 0.06, background: TRANSPARENT });
+}
+
+/** Trim splash wordmark to its ink bounds (removes uneven white margins). */
+async function extractSplashWordmark() {
+  const { data, info } = await sharp(SPLASH_SOURCE).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const bounds = contentBounds(data, info.width, info.height, info.channels, { paperThreshold: 248 });
+  const padX = Math.round(bounds.width * 0.04);
+  const padY = Math.round(bounds.height * 0.08);
+  const left = Math.max(0, bounds.left - padX);
+  const top = Math.max(0, bounds.top - padY);
+  const width = Math.min(info.width - left, bounds.width + padX * 2);
+  const height = Math.min(info.height - top, bounds.height + padY * 2);
+
+  return sharp(SPLASH_SOURCE).extract({ left, top, width, height }).png().toBuffer();
+}
+
+async function composeLandscapeSplash(size, wordmarkBuffer, { logoWidthRatio = 0.78, background = TRANSPARENT, format = 'png' } = {}) {
+  const meta = await sharp(wordmarkBuffer).metadata();
   const aspect = meta.width / meta.height;
   const logoWidth = Math.round(size * logoWidthRatio);
   const logoHeight = Math.round(logoWidth / aspect);
-  const logo = await sharp(SPLASH_SOURCE)
+  const logo = await sharp(wordmarkBuffer)
     .resize(logoWidth, logoHeight, { fit: 'contain', background: TRANSPARENT })
     .png()
     .toBuffer();
@@ -179,7 +219,9 @@ async function generateMonochrome(markBuffer, size, logoScale = 0.72) {
 
 async function main() {
   const mark = await extractLogoMark();
+  const wordmark = await extractSplashWordmark();
   await writePng(path.join(ASSETS, 'logo-mark.png'), mark);
+  await writePng(path.join(ASSETS, 'splash-wordmark.png'), wordmark);
 
   // Full icon: white plate + mark. Adaptive foreground: transparent + larger mark.
   const icon1024 = await composeLogo(mark, 1024, { logoScale: 0.78, background: WHITE });
@@ -191,7 +233,8 @@ async function main() {
     .toBuffer();
   const monochrome1024 = await generateMonochrome(mark, 1024, 0.72);
   const favicon48 = await composeLogo(mark, 48, { logoScale: 0.78, background: WHITE });
-  const splash1242 = await composeLandscapeSplash(1242, { logoWidthRatio: 0.78, background: WHITE });
+  // Square splash plate with wordmark perfectly centered (used by Expo splash + Android drawables).
+  const splash1242 = await composeLandscapeSplash(1242, wordmark, { logoWidthRatio: 0.82, background: WHITE });
 
   await writePng(path.join(ASSETS, 'icon.png'), icon1024);
   await writePng(path.join(ASSETS, 'adaptive-icon.png'), foreground1024);
@@ -236,8 +279,9 @@ async function main() {
     xxxhdpi: 800,
   };
 
+  // Android 12+ splash icons are masked to a circle — use the square mark, not the wide wordmark.
   for (const [density, size] of Object.entries(splashSizes)) {
-    const splash = await composeLandscapeSplash(size, { logoWidthRatio: 0.78, background: TRANSPARENT });
+    const splash = await composeLogo(mark, size, { logoScale: 0.72, background: TRANSPARENT });
     await writePng(path.join(ANDROID_RES, `drawable-${density}`, 'splashscreen_logo.png'), splash);
   }
 

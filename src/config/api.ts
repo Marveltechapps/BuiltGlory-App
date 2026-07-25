@@ -7,7 +7,7 @@ declare const process: { env?: Record<string, string | undefined> } | undefined;
 /** Default production API origin when no build-time override is provided. */
 export const DEFAULT_PRODUCTION_API_ORIGIN = 'https://api.builtglory.com';
 
-const DEFAULT_DEV_API_PORT = '3002';
+const DEFAULT_DEV_API_PORT = '5001';
 
 const ENV_KEYS = {
   apiUrl: ['EXPO_PUBLIC_API_URL', 'EXPO_PUBLIC_API_BASE_URL'],
@@ -71,7 +71,7 @@ function resolveDevApiOrigin() {
   }
 
   throw new Error(
-    'EXPO_PUBLIC_API_URL is not set. Add your computer\'s LAN IP (e.g. http://192.168.1.8:3002) to Customer-App-V1/.env and restart Expo.',
+    'EXPO_PUBLIC_API_URL is not set. Add your computer\'s LAN IP (e.g. http://192.168.1.8:5001) to Customer-App-V1/.env and restart Expo.',
   );
 }
 

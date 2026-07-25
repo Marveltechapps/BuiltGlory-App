@@ -129,13 +129,14 @@ export function useNav<T = any>() {
   };
   const switchTab = (tab: string) => {
     const target = TAB_BY_ID[tab];
-    if (!target || route.name === target.screen) return;
-    const parent = navigation.getParent?.();
-    if (isTabNavigator(parent)) {
-      parent.navigate(target.tab);
-      return;
-    }
-    rootNavigation(navigation).navigate('MainTabs', { screen: target.tab });
+    if (!target) return;
+    // Always open the tab root so Profile never resurfaces a nested screen
+    // such as Listing Status (listingDetail) left on ProfileTab's stack.
+    if (route.name === target.screen && isTabNavigator(navigation.getParent?.())) return;
+    rootNavigation(navigation).navigate('MainTabs', {
+      screen: target.tab,
+      params: { screen: target.screen, params: { ctx: {} } },
+    });
   };
   const onNav = (tab: string) => {
     switchTab(tab);

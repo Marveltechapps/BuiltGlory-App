@@ -157,14 +157,18 @@ export function ProfileScreen() {
   };
 
   useEffect(() => {
+    if (!authToken) return;
     loadProfileSummary();
   }, [authToken]);
 
   useFocusEffect(
     React.useCallback(() => {
-      if (!authToken) return;
+      if (!authToken) {
+        go('login', { returnTo: 'profile' });
+        return;
+      }
       void refreshUnreadNotificationCount(authToken, { getCachedValue, setCachedValue, clearCachedValue }).then(setUnread);
-    }, [authToken, clearCachedValue, getCachedValue, setCachedValue]),
+    }, [authToken, clearCachedValue, getCachedValue, go, setCachedValue]),
   );
 
   return (
