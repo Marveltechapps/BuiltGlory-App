@@ -1,8 +1,10 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, Image, Pressable, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { PushNotificationBanner } from '../hooks/usePushNotifications';
 import Icon from './Icon';
 import { lineHeightFor } from '../setup/androidText';
+import { useLayout } from '../layout/breakpoints';
 
 type NotificationBannerProps = {
   banner: PushNotificationBanner;
@@ -12,6 +14,8 @@ type NotificationBannerProps = {
 
 export function NotificationBanner({ banner, onDismiss, onPress }: NotificationBannerProps) {
   const entry = useRef(new Animated.Value(0)).current;
+  const insets = useSafeAreaInsets();
+  const layout = useLayout();
 
   useEffect(() => {
     Animated.spring(entry, {
@@ -26,6 +30,7 @@ export function NotificationBanner({ banner, onDismiss, onPress }: NotificationB
   const opacity = entry;
   const payloadImage = banner.payload?.image;
   const imageUri = typeof payloadImage === 'string' && payloadImage.trim() ? payloadImage.trim() : undefined;
+  const sideInset = Math.max(12, layout.gutter * 0.75, insets.left, insets.right);
 
   return (
     <Animated.View
@@ -33,14 +38,19 @@ export function NotificationBanner({ banner, onDismiss, onPress }: NotificationB
         opacity,
         transform: [{ translateY }],
         position: 'absolute',
-        left: 12,
-        right: 12,
-        top: 56,
+        left: sideInset,
+        right: sideInset,
+        top: Math.max(12, insets.top + 8),
         zIndex: 50,
+        maxWidth: layout.contentMaxWidth ?? undefined,
+        alignSelf: 'center',
+        width: '100%',
       }}
     >
       <Pressable
         onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${banner.title}. ${banner.body}`}
         className="overflow-hidden rounded-2xl border border-brand-200 bg-white"
         style={{
           shadowColor: '#0F172A',
@@ -60,18 +70,20 @@ export function NotificationBanner({ banner, onDismiss, onPress }: NotificationB
             )}
           </View>
           <View className="flex-1 min-w-0">
-            <Text className="text-[13px] font-bold text-ink-900" style={{ lineHeight: lineHeightFor(13) }} numberOfLines={1}>
+            <Text className="text-[13px] font-bold text-ink-900" style={{ lineHeight: lineHeightFor(13) }} numberOfLines={2}>
               {banner.title}
             </Text>
-            <Text className="text-[12px] text-ink-500 mt-0.5" style={{ lineHeight: lineHeightFor(12) }} numberOfLines={2}>
+            <Text className="text-[12px] text-ink-500 mt-0.5" style={{ lineHeight: lineHeightFor(12) }} numberOfLines={3}>
               {banner.body}
             </Text>
             <Text className="text-[10px] text-brand-600 font-semibold mt-1.5">Tap to open</Text>
           </View>
           <Pressable
             onPress={onDismiss}
-            hitSlop={8}
-            className="w-8 h-8 rounded-full bg-ink-50 items-center justify-center"
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss notification"
+            className="w-10 h-10 rounded-full bg-ink-50 items-center justify-center"
           >
             <Icon name="x" size={16} color="#64748B" />
           </Pressable>

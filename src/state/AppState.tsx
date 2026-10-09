@@ -17,6 +17,7 @@ import {
 import { FAVORITE_IDS_CACHE_PREFIX } from './primaryTabCache';
 import { preloadPrimaryTabs } from './preload';
 import { registerForFcmPushNotificationsAsync } from '../services/notifications';
+import { notifySessionExpired } from '../navigation/navigationRef';
 
 const AUTH_SESSION_KEY = 'builtglory.authSession';
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60_000;
@@ -195,7 +196,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           return session;
         })
         .catch(async () => {
+          const wasAuthenticated = Boolean(authTokenRef.current);
           await clearSession();
+          if (wasAuthenticated) notifySessionExpired();
           return null;
         })
         .finally(() => {
@@ -229,7 +232,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
       return await refreshSessionWithToken(storedSession.refreshToken);
     } catch {
+      const wasAuthenticated = Boolean(authTokenRef.current);
       await clearSession();
+      if (wasAuthenticated) notifySessionExpired();
       return null;
     }
   }, [clearSession, isStoredAccessTokenFresh, refreshSessionWithToken]);

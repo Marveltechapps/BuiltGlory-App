@@ -13,74 +13,74 @@ Expo React Native customer app for BuiltGlory (property discovery, enquiries, KY
 ```bash
 npm install
 cp .env.example .env
-# Edit .env — set EXPO_PUBLIC_API_URL to your computer's LAN IP (see below)
-npm start
+npm run setup:lan-firewall   # Windows once, elevated — Private LAN only on TCP 8081 + 5001
+npm start                    # Expo Go over LAN (same Wi-Fi)
 ```
 
-Use the Expo dev tools to open on iOS, Android, or web. For native builds:
+Use Expo Go on a phone/tablet connected to the **same Wi-Fi** as this PC. Scan the QR code — it always uses the PC's current LAN IP (no hardcoded IP, no tunnel).
+
+Equivalent CLI:
 
 ```bash
-npm run android
-npm run ios
+npx expo start --go --host lan
+```
+
+## Local networking (LAN only)
+
+| Requirement | How this project meets it |
+|-------------|---------------------------|
+| Same Wi-Fi | PC + Android device on one network |
+| Auto LAN IP | `scripts/start-expo-go.mjs` sets `REACT_NATIVE_PACKAGER_HOSTNAME` from the current Wi-Fi IPv4 |
+| Metro reachable | `--host lan`, port `8081`, Windows firewall rule (Private + RFC1918 only) |
+| No tunnel | Cloudflare / ngrok / `--tunnel` are not used |
+| No fixed IP | Do not set a `192.168.x.x` in `.env`; API follows Expo's Metro host + `EXPO_PUBLIC_API_PORT` |
+
+Windows one-time firewall setup (does **not** disable the firewall or expose ports to the public internet):
+
+```bash
+npm run setup:lan-firewall
 ```
 
 ## API URL configuration
 
 All HTTP and WebSocket requests use a single base URL from `src/config/api.ts`. **Never use `localhost` on a physical device** — it refers to the phone itself, not your development computer.
 
-### Environment variables
+Metro/Expo (`8081`) and the backend API (`5001`) are separate. The Expo QR/dev URL must stay on LAN Metro; the API origin is derived from the same LAN host at runtime.
 
-Copy `.env.example` to `.env` and set:
+### Environment variables
 
 | Variable | When used | Description |
 |----------|-----------|-------------|
-| `EXPO_PUBLIC_API_URL` | **Development** (`__DEV__`) | Backend origin for local dev (e.g. `http://192.168.1.8:5001`). Use your PC's **LAN IP**, not `localhost`. `/api/v1` is appended automatically. |
-| `EXPO_PUBLIC_PRODUCTION_API_URL` | **Preview / production APK** | HTTPS production API (default: `https://api.builtglory.com`). Used when `__DEV__` is false. |
-| `EXPO_PUBLIC_API_PORT` | Optional dev fallback | Port when inferring URL from the Expo dev server host (default: `5001`). |
+| `EXPO_PUBLIC_API_PORT` | **Development** (`__DEV__`) | Backend port when inferring URL from Expo's LAN host (default: `5001`). |
+| `EXPO_PUBLIC_API_URL` | Optional override | Only if you need a non-default origin. Private IPs are rewritten to Expo's current LAN host. Prefer leaving unset. |
+| `EXPO_PUBLIC_PRODUCTION_API_URL` | **Preview / production APK** | API used when `__DEV__` is false. |
 
-Legacy alias: `EXPO_PUBLIC_API_BASE_URL` is still read if `EXPO_PUBLIC_API_URL` is unset.
+### Resolution order (dev)
 
-### Resolution order
-
-| Build type | API origin |
-|------------|------------|
-| Expo dev server / dev client (`__DEV__`) | `EXPO_PUBLIC_API_URL` → Expo Metro LAN host → Android emulator `10.0.2.2` |
-| Preview APK / production APK | `EXPO_PUBLIC_PRODUCTION_API_URL` → `EXPO_PUBLIC_API_URL` → `https://api.builtglory.com` |
-
-### Find your LAN IP
-
-1. Start the backend: `cd Backend-V1 && npm run dev` (default port **5001** in this monorepo).
-2. Note your computer's Wi-Fi IP (Windows: `ipconfig`, macOS/Linux: `ifconfig` or `ip addr`).
-3. Set in `.env`: `EXPO_PUBLIC_API_URL=http://YOUR_LAN_IP:5001`
-4. Ensure phone and PC are on the **same Wi-Fi** and Windows Firewall allows inbound TCP on port 5001.
-5. Restart Expo (`npm start`) or rebuild the native app after changing `.env`.
+1. Expo Metro LAN host + `EXPO_PUBLIC_API_PORT` (preferred)
+2. Optional `EXPO_PUBLIC_API_URL` (rewritten to current LAN host when private)
+3. Android emulator → `http://10.0.2.2:5001`
 
 ### EAS builds
 
-For **preview** and **production** APKs, set `EXPO_PUBLIC_PRODUCTION_API_URL` in `eas.json` or EAS Secrets. Development builds can pass `EXPO_PUBLIC_API_URL` via EAS environment variables or your local `.env` during `eas build`.
+For **preview** and **production** APKs, set `EXPO_PUBLIC_PRODUCTION_API_URL` in `eas.json` or EAS Secrets.
 
 ```bash
-# Preview APK (uses production API from eas.json)
 eas build --profile preview --platform android
-
-# Production
 eas build --profile production --platform android
 ```
-
-After changing API URLs in `.env` or `eas.json`, **rebuild the APK** — env vars are baked in at build time.
-
-Google Maps keys are configured in `app.config.js`. Firebase push uses `google-services.json` locally.
 
 ## Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm start` | Start Expo dev server |
+| `npm start` / `npm run start:lan` | Expo Go over LAN |
+| `npm run setup:lan-firewall` | Windows: allow TCP 8081 + 5001 from private LAN only |
 | `npm run android` | Run on Android |
 | `npm run ios` | Run on iOS |
 | `npm run web` | Run in the browser |
 
 ## Related repos
 
-- **Backend** — `Backend-V1` (Express API)
-- **Dashboard** — `Dashboard-V1` (admin UI)
+- **Backend** — `BuiltGlory-Backend` (Express API)
+- **Dashboard** — `BuiltGlory-Dashboard-Frontend` (admin UI)

@@ -3,7 +3,8 @@ import { Image, View, Text, Pressable } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import Icon from '../components/Icon';
 import { BrandLogo } from '../components/BrandLogo';
-import { Screen, TopBar, Field, Input, Badge, PhotoPlaceholder, Sheet, UserAvatar } from '../components/shared';
+import { Screen, TopBar, Field, Input, Badge, PhotoPlaceholder, Sheet, UserAvatar, PageBody } from '../components/shared';
+import { useLayout } from '../layout/breakpoints';
 import { formatINR } from '../data/data';
 import { useNav } from '../navigation/useNav';
 import { useFocusEffect } from '@react-navigation/native';
@@ -102,6 +103,7 @@ function InlineError({ message, onRetry }: { message: string; onRetry?: () => vo
 // ─── P-01 Profile ────────────────────────────────────────────
 export function ProfileScreen() {
   const { go, resetTo } = useNav();
+  const layout = useLayout();
   const { authToken, currentUser, getCachedValue, setCachedValue, clearCachedValue, refreshCurrentUser, signOut } = useAppState();
   const [unread, setUnread] = useState(0);
   const [showLogout, setShowLogout] = useState(false);
@@ -115,7 +117,7 @@ export function ProfileScreen() {
     { icon: 'tag', label: 'My Listings', sub: 'Manage your property listings', target: 'myListings' },
     { icon: 'heart', label: 'Saved Properties', sub: 'Your saved properties', target: 'favorites' },
     { icon: 'settings', label: 'Settings', sub: 'App preferences and configuration', target: 'settingsMain' },
-    { icon: 'help-circle', label: 'Help & Support', sub: 'Get support and share feedback', target: 'helpFaqs' },
+    { icon: 'help-circle', label: 'Help & Support', sub: 'Get support and share feedback', target: 'help' },
     { icon: 'info', label: 'General Info', sub: 'About, terms and privacy', target: 'generalInfo' },
   ];
 
@@ -164,19 +166,19 @@ export function ProfileScreen() {
   useFocusEffect(
     React.useCallback(() => {
       if (!authToken) {
-        go('login', { returnTo: 'profile' });
+        resetTo('login', { returnTo: 'profile' });
         return;
       }
       void refreshUnreadNotificationCount(authToken, { getCachedValue, setCachedValue, clearCachedValue }).then(setUnread);
-    }, [authToken, clearCachedValue, getCachedValue, go, setCachedValue]),
+    }, [authToken, clearCachedValue, getCachedValue, resetTo, setCachedValue]),
   );
 
   return (
     <Screen padBottom>
-      <View className="bg-white px-4 pt-2 pb-5">
+      <View className="bg-white pt-2 pb-5" style={{ paddingHorizontal: layout.gutter }}>
         <View className="flex-row items-center justify-between mb-4">
-          <Text className="text-[18px] font-semibold text-ink-900">Profile</Text>
-          <Pressable onPress={() => go('notifications')} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center relative">
+          <Text className="text-[18px] font-semibold text-ink-900 flex-1 min-w-0 pr-3">Profile</Text>
+          <Pressable onPress={() => go('notifications')} className="w-11 h-11 rounded-full bg-ink-100 items-center justify-center relative">
             <Icon name="bell" size={17} color="#64748B" />
             {unread > 0 && <View className="absolute top-1 right-1 min-w-[16px] h-4 bg-rose-500 rounded-full items-center justify-center px-1"><Text className="text-white text-[9px] font-bold">{unread}</Text></View>}
           </Pressable>
@@ -187,9 +189,9 @@ export function ProfileScreen() {
             size={64}
             iconSize={32}
           />
-          <View className="flex-1">
-            <Text className="text-[16px] font-semibold text-ink-900">{profileName(currentUser)}</Text>
-            <Text className="text-[13px] text-ink-500">{profilePhone(currentUser)}</Text>
+          <View className="flex-1 min-w-0">
+            <Text className="text-[16px] font-semibold text-ink-900" numberOfLines={1}>{profileName(currentUser)}</Text>
+            <Text className="text-[13px] text-ink-500" numberOfLines={1}>{profilePhone(currentUser)}</Text>
             <View className="flex-row items-center gap-1 mt-0.5"><Icon name="badge-check" size={12} color="#10B981" /><Text className="text-[11px] text-emerald-600 font-medium">Verified</Text></View>
           </View>
           <Pressable onPress={() => go('profileEdit')} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center"><Icon name="edit-2" size={15} color="#64748B" /></Pressable>
@@ -205,11 +207,11 @@ export function ProfileScreen() {
         </View>
         {loading && <Text className="text-[11px] text-ink-400 mt-2">Refreshing profile summary...</Text>}
       </View>
-      <View className="px-4 py-4 gap-2">
+      <PageBody className="py-4 gap-2">
         {menuItems.map((item) => (
           <Pressable key={item.label} onPress={() => go(item.target)} className="flex-row items-center gap-4 p-3.5 bg-white rounded-card border border-ink-200">
             <View className="w-10 h-10 bg-ink-100 rounded-full items-center justify-center"><Icon name={item.icon} size={18} color="#64748B" /></View>
-            <View className="flex-1"><Text className="text-[14px] font-semibold text-ink-900">{item.label}</Text><Text className="text-[11.5px] text-ink-500" numberOfLines={1}>{item.sub}</Text></View>
+            <View className="flex-1 min-w-0"><Text className="text-[14px] font-semibold text-ink-900">{item.label}</Text><Text className="text-[11.5px] text-ink-500" numberOfLines={1}>{item.sub}</Text></View>
             <Icon name="chevron-right" size={16} color="#94A3B8" />
           </Pressable>
         ))}
@@ -218,7 +220,7 @@ export function ProfileScreen() {
           <Text className="flex-1 text-[14px] font-semibold text-rose-600">Logout</Text>
           <Icon name="chevron-right" size={16} color="#E11D48" />
         </Pressable>
-      </View>
+      </PageBody>
       {showLogout && (
         <Sheet onClose={() => setShowLogout(false)}>
           <View className="items-center mb-6">
@@ -429,7 +431,7 @@ export function OffersScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Offers & Deals" sub="Exclusive to Builtglory members" />
-      <View className="px-4 gap-3">
+      <PageBody className="gap-3">
         {loading && <Text className="text-[12px] text-ink-500">Loading live offer context...</Text>}
         {!!error && <InlineError message={error} onRetry={loadOffers} />}
         {offers.map((o) => (
@@ -444,7 +446,7 @@ export function OffersScreen() {
             </View>
           </Pressable>
         ))}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -455,7 +457,7 @@ export function NewsInsightsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="News & Insights" sub="Real estate market updates" />
-      <View className="px-4 gap-3">
+      <PageBody className="gap-3">
         {loading && <Text className="text-[12px] text-ink-500">Loading latest articles...</Text>}
         {!!error && (
           <Pressable onPress={reload} className="p-3 rounded-card border border-amber-200 bg-amber-50">
@@ -474,7 +476,7 @@ export function NewsInsightsScreen() {
             </View>
           </View>
         ))}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -491,7 +493,7 @@ export function GeneralInfoScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="General Info" sub="About Builtglory" />
-      <View className="px-4">
+      <PageBody>
         <View className="flex-row items-center gap-3 p-4 bg-ink-50 rounded-card mb-4">
           <BrandLogo size={48} />
           <View><Text className="text-[15px] font-bold text-ink-900">BUILTGLORY</Text><Text className="text-[11px] text-ink-500">Version {contentMetaString(about, 'version', '1.0.0')} · India</Text></View>
@@ -505,7 +507,7 @@ export function GeneralInfoScreen() {
             </Pressable>
           ))}
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -532,7 +534,7 @@ function LegalContentScreen({
   return (
     <Screen>
       <TopBar onBack={back} title={title} sub={sub} />
-      <View className="px-4 pb-6">
+      <PageBody className="pb-6">
         {loading && <Text className="mb-3 text-[12px] text-ink-500">Loading latest legal copy...</Text>}
         {!!error && (
           <Pressable onPress={reload} className="mb-3 p-3 rounded-card border border-amber-200 bg-amber-50">
@@ -549,7 +551,7 @@ function LegalContentScreen({
             <Text className="text-[13px] leading-6 text-ink-700">{contentBody(item)}</Text>
           </View>
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -633,7 +635,7 @@ export function HelpFeedbackScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Help & Feedback" sub="We're here 24×7" />
-      <View className="px-4 gap-5">
+      <PageBody className="gap-5">
         <Text className="text-[14px] font-semibold mb-2">Send Feedback</Text>
         {!!error && <InlineError message={error} />}
         {submitted ? (
@@ -649,7 +651,7 @@ export function HelpFeedbackScreen() {
         <Pressable onPress={requestCallback} disabled={submitting || callbackRequested} className={`w-full min-h-11 py-2.5 rounded-xl items-center justify-center border ${callbackRequested ? 'border-emerald-200 bg-emerald-50' : 'border-ink-200 bg-white'}`}>
           <Text className={`font-semibold text-[13px] ${callbackRequested ? 'text-emerald-700' : 'text-brand-600'}`}>{callbackRequested ? 'Callback requested' : 'Request support callback'}</Text>
         </Pressable>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -707,7 +709,7 @@ export function MyEnquiriesHistoryScreen() {
   return (
     <Screen refreshing={refreshing} onRefresh={() => loadHistory(true)}>
       <TopBar onBack={back} title="History & Enquiries" sub="Your activity on Builtglory" />
-      <View className="px-4">
+      <PageBody>
         <View className="flex-row gap-2 mb-4">
           {[['enquiries', 'Buy Enquiries'], ['listings', 'Sell Requests']].map(([id, l]) => (
             <Pressable key={id} onPress={() => setTab(id)} className={`flex-1 py-2 rounded-card border items-center ${tab === id ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
@@ -760,7 +762,7 @@ export function MyEnquiriesHistoryScreen() {
             })}
           </View>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }

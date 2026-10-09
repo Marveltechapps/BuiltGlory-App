@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, Linking, Platform } from 'react-native';
 import Icon from '../components/Icon';
 import { Spinner } from '../components/shared';
-import { useNav } from '../navigation/useNav';
+import { useBlockHardwareBack, useNav } from '../navigation/useNav';
 import { nextAuthenticatedRoute } from '../navigation/profileFlow';
 import { useAppState } from '../state/AppState';
 import { getPublicAppConfig, PublicAppConfig } from '../api/customer';
@@ -52,9 +52,18 @@ function usePublicAppConfig() {
 
 // ─── G-01 No Internet / Offline ───────────────────────────────
 export function OfflineScreen() {
-  const { go } = useNav();
+  const { resetTo } = useNav();
+  const { validateToken } = useAppState();
   const [retrying, setRetrying] = useState(false);
-  const retry = () => { setRetrying(true); setTimeout(() => { setRetrying(false); go('home'); }, 1200); };
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      const user = await validateToken();
+      resetTo(user ? nextAuthenticatedRoute(user) : 'login');
+    } finally {
+      setRetrying(false);
+    }
+  };
   return (
     <View className="flex-1 bg-white items-center justify-center px-8">
       <View className="w-24 h-24 rounded-full bg-ink-100 items-center justify-center mb-5"><Icon name="wifi-off" size={44} color="#94A3B8" /></View>
@@ -70,6 +79,7 @@ export function OfflineScreen() {
 
 // ─── G-02 Force Update ─────────────────────────────────────────
 export function ForceUpdateScreen() {
+  useBlockHardwareBack();
   const { config, loading, error, reload } = usePublicAppConfig();
   const storeUrl =
     (Platform.OS === 'android' ? config?.storeUrls.android : config?.storeUrls.ios) || STORE_UPDATE_URL;
@@ -107,6 +117,7 @@ export function ForceUpdateScreen() {
 
 // ─── G-03 Maintenance Mode ─────────────────────────────────────
 export function MaintenanceScreen() {
+  useBlockHardwareBack();
   const [secs, setSecs] = useState(60);
   const { config, loading, error, reload } = usePublicAppConfig();
   const message = config?.maintenance.message || MAINTENANCE_MESSAGE;
@@ -133,6 +144,7 @@ export function MaintenanceScreen() {
 // ─── G-04 Session Expiry ────────────────────────────────────────
 export function SessionExpiryScreen() {
   const { resetTo } = useNav();
+  useBlockHardwareBack();
   const { validateToken, signOut } = useAppState();
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState('');

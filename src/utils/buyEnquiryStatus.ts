@@ -52,11 +52,12 @@ export function formatPaymentStatus(status?: string) {
   const value = String(status || '').toLowerCase();
   const labels: Record<string, string> = {
     created: 'Initiated',
-    pending: 'Processing',
-    paid: 'Confirmed',
+    pending: 'Awaiting verification',
+    paid: 'Verified',
     failed: 'Failed',
     cancelled: 'Cancelled',
     refunded: 'Refunded',
+    rejected: 'Rejected',
   };
   return labels[value] ?? (value ? value.replace(/_/g, ' ') : 'Unknown');
 }

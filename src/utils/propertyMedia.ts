@@ -42,31 +42,54 @@ export function embeddableMediaUrl(url: string) {
   return trimmed;
 }
 
-export function virtualTourUrl(media?: { tour3dUrl?: string; videoUrl?: string }) {
+export function virtualTourUrl(media?: { tour3dUrl?: string }) {
   const tour = media?.tour3dUrl?.trim();
-  if (tour) return tour;
-  const video = media?.videoUrl?.trim();
-  if (video && (isYoutubeUrl(video) || isVimeoUrl(video) || /matterport|kuula|roundme|cloudpano|3d|360|tour/i.test(video))) {
-    return video;
-  }
-  return null;
+  return tour || null;
 }
 
-export function aerialDroneUrl(media?: { droneImageUrl?: string; videoUrl?: string }) {
+export function aerialDroneUrl(media?: { droneImageUrl?: string; droneVideoUrl?: string }) {
+  const droneVideo = media?.droneVideoUrl?.trim();
+  if (droneVideo) return droneVideo;
   const drone = media?.droneImageUrl?.trim();
   if (drone) return drone;
-  const video = media?.videoUrl?.trim();
-  if (video) return video;
   return null;
 }
 
-export function hasVirtualTour(media?: { tour3dUrl?: string; videoUrl?: string }) {
+export function hasVirtualTour(media?: { tour3dUrl?: string }) {
   return !!virtualTourUrl(media);
 }
 
-export function hasAerialContent(
-  media?: { droneImageUrl?: string; videoUrl?: string },
-  coordinates?: { latitude: number; longitude: number } | null,
-) {
-  return !!aerialDroneUrl(media) || !!coordinates;
+export function hasAerialContent(media?: { droneImageUrl?: string; droneVideoUrl?: string }) {
+  return !!aerialDroneUrl(media);
+}
+
+/** Collect floor-plan image URLs from property media (supports comma/newline lists). */
+export function propertyFloorPlanUrls(media?: {
+  floorPlanUrl?: string;
+  floorPlanUrls?: string[];
+} | null) {
+  const collected: string[] = [];
+  const push = (value?: string | null) => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (!trimmed) return;
+    trimmed.split(/[\n,|]+/).forEach((part) => {
+      const url = part.trim();
+      if (url && !collected.includes(url)) collected.push(url);
+    });
+  };
+  if (Array.isArray(media?.floorPlanUrls)) {
+    media.floorPlanUrls.forEach((url) => push(url));
+  }
+  push(media?.floorPlanUrl);
+  return collected;
+}
+
+export function propertyFloorPlans(media?: {
+  floorPlanUrl?: string;
+  floorPlanUrls?: string[];
+} | null) {
+  return propertyFloorPlanUrls(media).map((url, index) => ({
+    url,
+    label: `Plan ${index + 1}`,
+  }));
 }

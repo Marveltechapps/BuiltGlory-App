@@ -1,5 +1,5 @@
-import React from 'react';
-import { Route, getFocusedRouteNameFromRoute } from '@react-navigation/native';
+import React, { useEffect } from 'react';
+import { Route, getFocusedRouteNameFromRoute, useNavigation } from '@react-navigation/native';
 import { BottomTabBarProps, createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { View } from 'react-native';
@@ -7,39 +7,32 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BOTTOM_NAV_HEIGHT, BottomNav } from '../components/shared';
 import { useAppState } from '../state/AppState';
 import { ALL_SCREENS } from './registry';
+import {
+  AUTH_SCREEN_KEY_SET,
+  GLOBAL_SCREEN_KEY_SET,
+  LEGAL_SCREEN_KEY_SET,
+  ROOT_SCREEN_NAMES,
+  TAB_BAR_VISIBLE_ROUTES,
+  TAB_CONFIG,
+  TAB_ID_BY_ROUTE,
+  TAB_ROOT_BY_ROUTE,
+  TAB_ROUTE_BY_ID,
+} from './routes';
 
 const RootStack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 const AppStack = createNativeStackNavigator();
 
-const AUTH_SCREEN_KEYS = new Set([
-  'splash',
-  'onboarding',
-  'login',
-  'otp',
-  'profileSetup',
-  'locationType',
-  'terms',
-  'permissions',
-  'termsOfUse',
-  'privacyPolicy',
-]);
-const GLOBAL_SCREEN_KEYS = new Set(['offline', 'forceUpdate', 'maintenance', 'sessionExpiry']);
-const TAB_BAR_VISIBLE_ROUTES = new Set(['home', 'buyTypes', 'sellTypes', 'sellerDashboard', 'profile']);
-
-const ROOT_SCREENS = ALL_SCREENS.filter((screen) => AUTH_SCREEN_KEYS.has(screen.key) || GLOBAL_SCREEN_KEYS.has(screen.key));
-const APP_SCREENS = ALL_SCREENS.filter((screen) => !AUTH_SCREEN_KEYS.has(screen.key) && !GLOBAL_SCREEN_KEYS.has(screen.key));
-
-const TAB_CONFIG = [
-  { id: 'home', routeName: 'HomeTab', rootScreen: 'home' },
-  { id: 'buy', routeName: 'BuyTab', rootScreen: 'buyTypes' },
-  { id: 'sell', routeName: 'SellTab', rootScreen: 'sellTypes' },
-  { id: 'profile', routeName: 'ProfileTab', rootScreen: 'profile' },
-];
-
-const TAB_ID_BY_ROUTE = Object.fromEntries(TAB_CONFIG.map((tab) => [tab.routeName, tab.id]));
-const TAB_ROUTE_BY_ID = Object.fromEntries(TAB_CONFIG.map((tab) => [tab.id, tab.routeName]));
-const TAB_ROOT_BY_ROUTE = Object.fromEntries(TAB_CONFIG.map((tab) => [tab.routeName, tab.rootScreen]));
+const ROOT_SCREENS = ALL_SCREENS.filter((screen) => (
+  AUTH_SCREEN_KEY_SET.has(screen.key)
+  || LEGAL_SCREEN_KEY_SET.has(screen.key)
+  || GLOBAL_SCREEN_KEY_SET.has(screen.key)
+));
+const APP_SCREENS = ALL_SCREENS.filter((screen) => (
+  !AUTH_SCREEN_KEY_SET.has(screen.key)
+  && !LEGAL_SCREEN_KEY_SET.has(screen.key)
+  && !GLOBAL_SCREEN_KEY_SET.has(screen.key)
+));
 
 function AppStackNavigator({ initialRouteName }: { initialRouteName: string }) {
   return (
@@ -83,9 +76,6 @@ function AppTabBar({ state, navigation }: BottomTabBarProps) {
           const routeName = TAB_ROUTE_BY_ID[tab];
           if (!routeName) return;
           const rootScreen = TAB_ROOT_BY_ROUTE[routeName];
-          // Always land on the tab root. ProfileTab can retain nested screens
-          // (e.g. listingDetail titled "Listing Status"); switching tabs must
-          // not restore those instead of Profile/My Account.
           navigation.navigate(routeName, {
             screen: rootScreen,
             params: { ctx: {} },
@@ -97,6 +87,20 @@ function AppTabBar({ state, navigation }: BottomTabBarProps) {
 }
 
 function MainTabs() {
+  const navigation = useNavigation<any>();
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event: any) => {
+      const parentState = navigation.getParent()?.getState?.();
+      if (!parentState || parentState.index <= 0) return;
+      const previous = parentState.routes[parentState.index - 1]?.name;
+      if (previous && ROOT_SCREEN_NAMES.has(previous)) {
+        event.preventDefault();
+      }
+    });
+    return unsubscribe;
+  }, [navigation]);
+
   return (
     <Tab.Navigator
       initialRouteName="HomeTab"
@@ -118,9 +122,18 @@ export function RootNavigator() {
   return (
     <RootStack.Navigator initialRouteName="splash" screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
       {ROOT_SCREENS.map((screen) => (
-        <RootStack.Screen key={screen.key} name={screen.key} component={screen.Comp} />
+        <RootStack.Screen
+          key={screen.key}
+          name={screen.key}
+          component={screen.Comp}
+          options={GLOBAL_SCREEN_KEY_SET.has(screen.key) ? { gestureEnabled: false } : undefined}
+        />
       ))}
-      <RootStack.Screen name="MainTabs" component={MainTabs} options={{ animation: 'none' }} />
+      <RootStack.Screen
+        name="MainTabs"
+        component={MainTabs}
+        options={{ animation: 'none', gestureEnabled: false }}
+      />
     </RootStack.Navigator>
   );
 }

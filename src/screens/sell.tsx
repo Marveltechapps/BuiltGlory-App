@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Keyboard, KeyboardAvoidingView, Platform, View, Text, Pressable, ScrollView, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { androidInputStyle } from '../setup/androidText';
@@ -6,7 +6,7 @@ import * as ImagePicker from 'expo-image-picker';
 import Icon from '../components/Icon';
 import {
   Screen, TopBar, Field, Input, Chip, Badge, Btn, PhotoPlaceholder, ProgressBar,
-  FadeInView, EmptyState,
+  FadeInView, EmptyState, PageBody,
 } from '../components/shared';
 import { PROPERTY_TYPES, SPECS, formatINR } from '../data/data';
 import { useNav } from '../navigation/useNav';
@@ -14,11 +14,33 @@ import { PropertyTypeGrid } from './buy';
 import { useAppState } from '../state/AppState';
 import { SELL_LISTINGS_CACHE_PREFIX } from '../state/primaryTabCache';
 import { ChatSocket, createChatSocket } from '../realtime/chatSocket';
+import { usePolling } from '../hooks/usePolling';
+import { gridItemWidth, useLayout } from '../layout/breakpoints';
+import {
+  AGE_OPTIONS,
+  BHK_OPTIONS,
+  SELL_LIMITS,
+  clearFieldError,
+  digitsOnly,
+  firstErrorKey,
+  hydrateSellAddress,
+  hydrateSellBasic,
+  isSectionValid,
+  sellFieldVisibility,
+  sellSubTypesFor,
+  useSellFormScroll,
+  validatePhotoAsset,
+  validateSellAddress,
+  validateSellAmenities,
+  validateSellBasic,
+  validateSellPhotos,
+} from '../utils/sellValidation';
 import {
   createCallbackRequest,
   createSellRequestDraft,
   getSellRequest,
   getSellerActivity,
+  listCustomerProperties,
   listSellRequests,
   sendSellerMessage,
   SellerActivity,
@@ -29,6 +51,8 @@ import {
   uploadCustomerDocument,
 } from '../api/customer';
 import { isNetworkError, resourceErrorMessage } from '../utils/apiErrors';
+import { LocationPickerMap } from '../components/LocationPickerMap';
+import { DetectedLocation, distanceMeters, isValidCoordinate } from '../utils/location';
 
 export const sellRequestIdOf = (request?: SellRequest | null) => request?._id ?? request?.id ?? '';
 export const ctxSellRequestId = (ctx?: any) =>
@@ -184,6 +208,7 @@ export function useSellerActivityContext(ctx: any) {
   useEffect(() => {
     load(Boolean(ctx?.refresh));
   }, [authToken, sellRequestId, ctx?.refresh]);
+  usePolling(() => load(true), 10000, Boolean(authToken && sellRequestId));
   return {
     authToken,
     sellRequestId,
@@ -206,6 +231,7 @@ export function SellTypeScreen() {
   const { authToken } = useAppState();
   const [savingType, setSavingType] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [recentSold, setRecentSold] = useState<Array<{ id: string; price: number; days: number; title: string }>>([]);
   const startDraft = async (type: string) => {
     if (!authToken || savingType) {
       setError('Please sign in again before creating a sell request.');
@@ -222,69 +248,102 @@ export function SellTypeScreen() {
       setSavingType(null);
     }
   };
+  useEffect(() => {
+    let cancelled = false;
+    listCustomerProperties({ recentlySold: true, limit: 8, sort: 'newest' })
+      .then((properties) => {
+        if (cancelled) return;
+        setRecentSold(properties.map((property) => {
+          const soldAt = property.soldAt ? new Date(property.soldAt).getTime() : Date.parse(property.updatedAt || '') || Date.now();
+          const days = Math.max(1, Math.round((Date.now() - soldAt) / 86400000));
+          return {
+            id: String(property._id ?? property.id ?? property.referenceId ?? ''),
+            price: Number(property.price) || 0,
+            days,
+            title: property.title || 'Sold property',
+          };
+        }).filter((item) => item.id && item.price > 0));
+      })
+      .catch(() => {
+        if (!cancelled) setRecentSold([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
   return (
     <Screen padBottom>
       <TopBar
         title="Sell Property"
-        right={<View className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center"><Icon name="help-circle" size={17} color="#64748B" /></View>}
+        right={
+          <Pressable onPress={() => go('help')} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center">
+            <Icon name="help-circle" size={17} color="#64748B" />
+          </Pressable>
+        }
       />
-      <View className="px-4 mb-4">
+      <PageBody className="mb-4">
         <Text className="text-[22px] font-bold text-ink-900">What Would You Like to Sell?</Text>
         <Text className="text-[14px] text-ink-500 mt-1">Select property type to get started</Text>
-      </View>
+      </PageBody>
       {!!error && <ErrorCard message={error} />}
       {savingType && <LoadingBlock label="Saving property type..." />}
       <PropertyTypeGrid onSelect={startDraft} accentColor="#059669" surface="sell" />
-      <View className="px-4 mt-5">
+      <PageBody className="mt-5">
         <Text className="text-[14px] font-semibold mb-2">Need Help?</Text>
         <View className="bg-brand-50 rounded-xl p-4 flex-row items-start gap-3">
           <Icon name="info" size={16} color="#1A6FFF" />
           <View className="flex-1">
             <Text className="text-[13px] font-medium text-ink-900 mb-0.5">Not sure which category?</Text>
             <Text className="text-[12px] text-ink-600 mb-3">Get free consultation from our property experts</Text>
-            <Pressable onPress={() => go('customerSupport')} className="flex-row items-center gap-2 bg-brand-600 px-4 py-2 rounded-lg self-start">
+            <Pressable onPress={() => go('callUs')} className="flex-row items-center gap-2 bg-brand-600 px-4 py-2 rounded-lg self-start">
               <Icon name="phone" size={14} color="white" /><Text className="text-white text-[12px] font-medium">Call Us</Text>
             </Pressable>
           </View>
         </View>
-      </View>
-      <View className="px-4 mt-5">
+      </PageBody>
+      <PageBody className="mt-5">
         <Text className="text-[14px] font-semibold mb-3">Recently Sold on Builtglory</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
-          {[['₹45L', 12], ['₹85L', 8], ['₹55L', 15]].map(([price, days], i) => (
-            <View key={i} style={{ width: 130 }} className="bg-white border border-ink-200 rounded-lg overflow-hidden">
-              <PhotoPlaceholder tag={'sold-' + i} height={72} />
-              <View className="p-2">
-                <Text className="text-[13px] font-bold text-brand-600">{price}</Text>
-                <Text className="text-[10.5px] text-ink-600">Sold in {days} days</Text>
+        {recentSold.length === 0 ? (
+          <View className="rounded-card border border-ink-200 p-4">
+            <Text className="text-[12px] text-ink-500">Sold listings will appear here from live inventory once deals close.</Text>
+          </View>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
+            {recentSold.map((item) => (
+              <View key={item.id} style={{ width: 130 }} className="bg-white border border-ink-200 rounded-lg overflow-hidden">
+                <PhotoPlaceholder tag={item.id} height={72} />
+                <View className="p-2">
+                  <Text className="text-[13px] font-bold text-brand-600">{formatINR(item.price)}</Text>
+                  <Text className="text-[10.5px] text-ink-600" numberOfLines={1}>{item.title}</Text>
+                  <Text className="text-[10.5px] text-ink-500">Sold in {item.days} days</Text>
+                </View>
               </View>
-            </View>
-          ))}
-        </ScrollView>
-      </View>
-      <View className="px-4 mt-5 mb-6">
+            ))}
+          </ScrollView>
+        )}
+      </PageBody>
+      <PageBody className="mt-5 mb-6">
         <Text className="text-[14px] font-semibold mb-3">Why Sell with Builtglory?</Text>
         <View className="flex-row flex-wrap gap-2">
           <View className="bg-emerald-500 px-3 py-1.5 rounded-full"><Text className="text-white text-[11px] font-semibold">✓ No Commission</Text></View>
           <View className="bg-brand-600 px-3 py-1.5 rounded-full"><Text className="text-white text-[11px] font-semibold">✓ Verified Buyers</Text></View>
           <View className="bg-amber-500 px-3 py-1.5 rounded-full"><Text className="text-white text-[11px] font-semibold">✓ Quick Sale</Text></View>
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
 
 // ─── Sell step header ─────────────────────────────────────────
 export function SellHeader({ step, totalSteps = 7, back, title }: { step: number; totalSteps?: number; back: () => void; title: string }) {
+  const layout = useLayout();
   return (
-    <View className="px-4 pt-2 bg-white">
-      <View className="flex-row items-center justify-between -ml-1 mb-1">
-        <Pressable onPress={back} className="p-2 rounded-full"><Icon name="arrow-left" size={20} color="#0F172A" /></Pressable>
-        <View className="flex-1 items-center">
+    <View className="pt-2 bg-white" style={{ paddingHorizontal: layout.gutter }}>
+      <View className="flex-row items-center justify-between -ml-1 mb-1 gap-2">
+        <Pressable onPress={back} hitSlop={8} className="min-w-[44px] min-h-[44px] items-center justify-center rounded-full"><Icon name="arrow-left" size={20} color="#0F172A" /></Pressable>
+        <View className="flex-1 min-w-0 items-center">
           <Text className="text-[10px] text-ink-500 font-semibold uppercase tracking-wider">Step {step} of {totalSteps}</Text>
-          <Text className="text-[17px] font-bold text-ink-900">{title}</Text>
+          <Text className="text-[17px] font-bold text-ink-900 text-center" numberOfLines={2}>{title}</Text>
         </View>
-        <Text className="text-[11px] text-ink-400 font-medium mr-2">{step}/{totalSteps}</Text>
+        <Text className="text-[11px] text-ink-400 font-medium mr-2 w-10 text-right">{step}/{totalSteps}</Text>
       </View>
       <ProgressBar value={(step / totalSteps) * 100} />
     </View>
@@ -295,32 +354,64 @@ export function SellHeader({ step, totalSteps = 7, back, title }: { step: number
 export function SellBasicScreen() {
   const { go, back, ctx } = useNav();
   const { authToken } = useAppState();
-  const type = ctx?.type || 'apartment';
+  const type = ctx?.type || ctx?.sellRequest?.propertyType || 'apartment';
   const typeLabel = PROPERTY_TYPES.find((t) => t.id === type)?.label || 'Apartment';
-  const [data, setData] = useState({ title: '', bhk: '', builtUp: '', floor: '', totalFloors: '', unitNo: '', age: '' });
+  const visible = sellFieldVisibility(type);
+  const subTypeOpts = sellSubTypesFor(type);
+  const [data, setData] = useState(() => hydrateSellBasic(ctx, ctx?.sellRequest));
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [subTypeOpen, setSubTypeOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const bhkOpts = ['1 BHK', '2 BHK', '3 BHK', '4 BHK', '5+ BHK', 'Studio'];
-  const ageOpts = ['Under Construction', '0–1 year', '1–5 years', '5–10 years', '10+ years'];
-  const set = (k: string, v: string) => setData((d) => ({ ...d, [k]: v }));
-  const isValid = !!(data.title && data.bhk && data.builtUp && data.floor && data.totalFloors && data.age && authToken && ctxSellRequestId(ctx));
+  const { scrollRef, registerForm, registerField, scrollToField } = useSellFormScroll();
+  const set = (k: keyof typeof data, v: string) => {
+    setData((d) => ({ ...d, [k]: v }));
+    setFieldErrors((current) => clearFieldError(current, k === 'totalFloors' ? 'floor' : String(k)));
+    if (k === 'totalFloors') setFieldErrors((current) => clearFieldError(current, 'totalFloors'));
+  };
+  const blurField = (key: keyof typeof data) => {
+    const next = validateSellBasic({ ...data }, type);
+    setFieldErrors((current) => {
+      const updated = { ...current };
+      if (next[key]) updated[String(key)] = next[key];
+      else delete updated[String(key)];
+      if (key === 'floor' || key === 'totalFloors') {
+        if (next.floor) updated.floor = next.floor;
+        else delete updated.floor;
+        if (next.totalFloors) updated.totalFloors = next.totalFloors;
+        else delete updated.totalFloors;
+      }
+      return updated;
+    });
+  };
   const saveAndContinue = async () => {
-    if (!isValid || saving || !authToken) return;
+    if (saving || !authToken) return;
+    const errors = validateSellBasic(data, type);
+    setFieldErrors(errors);
+    if (!isSectionValid(errors)) {
+      scrollToField(firstErrorKey(errors));
+      return;
+    }
+    if (!ctxSellRequestId(ctx)) {
+      setError('Listing draft is missing. Go back and start again.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
       const sellRequest = await updateSellRequest(authToken, ctxSellRequestId(ctx), {
         propertyType: type,
-        propertyTitle: data.title,
+        propertyTitle: data.title.trim().slice(0, SELL_LIMITS.titleMax),
         draftStep: 2,
         specifications: {
           ...ctx?.sellRequest?.specifications,
-          bhk: data.bhk,
-          builtUpArea: Number(data.builtUp),
-          floor: data.floor,
-          totalFloors: Number(data.totalFloors),
-          unitNo: data.unitNo || null,
-          age: data.age,
+          ...(visible.subType ? { subType: data.subType } : {}),
+          ...(visible.bhk ? { bhk: data.bhk } : {}),
+          ...(visible.builtUp ? { builtUpArea: Number(data.builtUp) } : {}),
+          ...(visible.floor ? { floor: data.floor } : {}),
+          ...(visible.totalFloors ? { totalFloors: Number(data.totalFloors) } : {}),
+          ...(visible.unitNo ? { unitNo: data.unitNo.trim() || null } : {}),
+          ...(visible.age ? { age: data.age, propertyAge: data.age } : {}),
         },
       });
       go('sellAddress', { ...ctx, type, basic: data, sellRequest, sellRequestId: sellRequestIdOf(sellRequest) });
@@ -331,49 +422,155 @@ export function SellBasicScreen() {
     }
   };
   return (
-    <Screen padBottom>
+    <Screen padBottom scrollRef={scrollRef}>
       <SellHeader step={1} back={back} title="Basic Details" />
       {!!error && <ErrorCard message={error} />}
       {!authToken && <ErrorCard message="Please sign in again before saving seller details." />}
-      <View className="px-4 mt-4 gap-4">
+      <PageBody className="mt-4 gap-4" onLayout={(e) => registerForm(e.nativeEvent.layout.y)}>
         <View className="flex-row items-center justify-between bg-brand-50 rounded-full px-4 py-2.5">
           <Text className="text-brand-600 text-[13px] font-medium">{typeLabel} Selected</Text>
           <Pressable onPress={back}><Icon name="edit-2" size={14} color="#1A6FFF" /></Pressable>
         </View>
         <Text className="text-[16px] font-semibold text-ink-900">Tell Us About Your Property</Text>
-        <Field label="Property Title" required><Input placeholder="e.g. Bright 3 BHK in Adyar" value={data.title} onChangeText={(v) => set('title', v)} /></Field>
-        <Field label="BHK Configuration" required>
-          <View className="flex-row flex-wrap gap-2">
-            {bhkOpts.map((b) => (
-              <Pressable key={b} onPress={() => set('bhk', b)} className={`px-4 py-2 rounded-full ${data.bhk === b ? 'bg-brand-600' : 'bg-ink-100'}`}>
-                <Text className={`text-[12px] font-medium ${data.bhk === b ? 'text-white' : 'text-ink-700'}`}>{b}</Text>
+        <View onLayout={(e) => registerField('title', e.nativeEvent.layout.y)}>
+          <Field label="Property Title" required error={fieldErrors.title}>
+            <Input
+              placeholder="e.g. Bright 3 BHK in Adyar"
+              value={data.title}
+              maxLength={SELL_LIMITS.titleMax}
+              invalid={!!fieldErrors.title}
+              onChangeText={(v) => set('title', v)}
+              onBlur={() => blurField('title')}
+            />
+            <Text className="mt-1.5 text-[11px] text-ink-500">{data.title.length}/{SELL_LIMITS.titleMax} characters</Text>
+          </Field>
+        </View>
+        {visible.subType && (
+          <View onLayout={(e) => registerField('subType', e.nativeEvent.layout.y)}>
+            <Field label="Property Sub-Type" required error={fieldErrors.subType}>
+              <Pressable
+                onPress={() => setSubTypeOpen((open) => !open)}
+                className={`min-h-[48px] px-3 py-2.5 bg-white border rounded-card flex-row items-center justify-between ${fieldErrors.subType ? 'border-rose-500' : subTypeOpen || data.subType ? 'border-brand-600' : 'border-ink-200'}`}
+              >
+                <Text className={`text-[14px] ${data.subType ? 'text-ink-900' : 'text-ink-400'}`}>
+                  {data.subType || 'Select sub-type'}
+                </Text>
+                <Icon name={subTypeOpen ? 'chevron-up' : 'chevron-down'} size={16} color="#64748B" />
               </Pressable>
-            ))}
+              {subTypeOpen && (
+                <View className="mt-1 border border-ink-200 rounded-card overflow-hidden bg-white">
+                  {subTypeOpts.map((option) => {
+                    const active = data.subType === option;
+                    return (
+                      <Pressable
+                        key={option}
+                        onPress={() => {
+                          set('subType', option);
+                          setSubTypeOpen(false);
+                        }}
+                        className={`px-3 py-3 border-b border-ink-100 ${active ? 'bg-brand-50' : 'bg-white'}`}
+                      >
+                        <Text className={`text-[14px] ${active ? 'text-brand-700 font-semibold' : 'text-ink-800'}`}>{option}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+            </Field>
           </View>
-        </Field>
-        <Field label="Built-up Area (sqft)" required><Input keyboardType="numeric" placeholder="e.g. 1200" value={data.builtUp} onChangeText={(v) => set('builtUp', v)} /></Field>
-        <Field label="Floor Number" required>
-          <View className="flex-row gap-2">
-            <View className="flex-1"><Input keyboardType="numeric" placeholder="Your floor" value={data.floor} onChangeText={(v) => set('floor', v)} /></View>
-            <View className="flex-1"><Input keyboardType="numeric" placeholder="Total floors" value={data.totalFloors} onChangeText={(v) => set('totalFloors', v)} /></View>
+        )}
+        {visible.bhk && (
+          <View onLayout={(e) => registerField('bhk', e.nativeEvent.layout.y)}>
+            <Field label="BHK Configuration" required error={fieldErrors.bhk}>
+              <View className="flex-row flex-wrap gap-2">
+                {BHK_OPTIONS.map((b) => (
+                  <Pressable key={b} onPress={() => set('bhk', b)} className={`px-4 py-2 rounded-full ${data.bhk === b ? 'bg-brand-600' : 'bg-ink-100'}`}>
+                    <Text className={`text-[12px] font-medium ${data.bhk === b ? 'text-white' : 'text-ink-700'}`}>{b}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </Field>
           </View>
-        </Field>
-        <Field label="Flat / Unit Number" hint="Optional"><Input placeholder="e.g. A-204, Tower B" value={data.unitNo} onChangeText={(v) => set('unitNo', v)} /></Field>
-        <Field label="Property Age" required>
-          <View className="flex-row flex-wrap gap-2">
-            {ageOpts.map((a) => (
-              <Pressable key={a} onPress={() => set('age', a)} className={`px-3 py-2 rounded-full ${data.age === a ? 'bg-brand-600' : 'bg-ink-100'}`}>
-                <Text className={`text-[12px] font-medium ${data.age === a ? 'text-white' : 'text-ink-700'}`}>{a}</Text>
-              </Pressable>
-            ))}
+        )}
+        {visible.builtUp && (
+          <View onLayout={(e) => registerField('builtUp', e.nativeEvent.layout.y)}>
+            <Field label="Built-up Area (sqft)" required error={fieldErrors.builtUp}>
+              <Input
+                keyboardType="numeric"
+                placeholder="e.g. 1200"
+                value={data.builtUp}
+                invalid={!!fieldErrors.builtUp}
+                onChangeText={(v) => set('builtUp', digitsOnly(v))}
+                onBlur={() => blurField('builtUp')}
+              />
+            </Field>
           </View>
-        </Field>
-      </View>
-      <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={!isValid || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${isValid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
-          <Text className={`font-semibold text-[15px] ${isValid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Continue to Location'}</Text>
+        )}
+        {(visible.floor || visible.totalFloors) && (
+          <View onLayout={(e) => registerField('floor', e.nativeEvent.layout.y)}>
+            <Field label="Floor Number" required error={fieldErrors.floor || fieldErrors.totalFloors}>
+              <View className="flex-row gap-2">
+                {visible.floor && (
+                  <View className="flex-1">
+                    <Input
+                      keyboardType="numeric"
+                      placeholder="Your floor"
+                      value={data.floor}
+                      invalid={!!fieldErrors.floor}
+                      onChangeText={(v) => set('floor', v.replace(/[^\d-]/g, ''))}
+                      onBlur={() => blurField('floor')}
+                    />
+                  </View>
+                )}
+                {visible.totalFloors && (
+                  <View className="flex-1">
+                    <Input
+                      keyboardType="numeric"
+                      placeholder="Total floors"
+                      value={data.totalFloors}
+                      invalid={!!fieldErrors.totalFloors}
+                      onChangeText={(v) => set('totalFloors', digitsOnly(v))}
+                      onBlur={() => blurField('totalFloors')}
+                    />
+                  </View>
+                )}
+              </View>
+            </Field>
+          </View>
+        )}
+        {visible.unitNo && (
+          <View onLayout={(e) => registerField('unitNo', e.nativeEvent.layout.y)}>
+            <Field label="Flat / Unit Number" hint="Optional" error={fieldErrors.unitNo}>
+              <Input
+                placeholder="e.g. A-204, Tower B"
+                value={data.unitNo}
+                maxLength={SELL_LIMITS.unitNoMax}
+                invalid={!!fieldErrors.unitNo}
+                onChangeText={(v) => set('unitNo', v)}
+                onBlur={() => blurField('unitNo')}
+              />
+            </Field>
+          </View>
+        )}
+        {visible.age && (
+          <View onLayout={(e) => registerField('age', e.nativeEvent.layout.y)}>
+            <Field label="Property Age" required error={fieldErrors.age}>
+              <View className="flex-row flex-wrap gap-2">
+                {AGE_OPTIONS.map((a) => (
+                  <Pressable key={a} onPress={() => set('age', a)} className={`px-3 py-2 rounded-full ${data.age === a ? 'bg-brand-600' : 'bg-ink-100'}`}>
+                    <Text className={`text-[12px] font-medium ${data.age === a ? 'text-white' : 'text-ink-700'}`}>{a}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </Field>
+          </View>
+        )}
+      </PageBody>
+      <PageBody className="mt-4">
+        <Pressable onPress={saveAndContinue} disabled={saving || !authToken} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${saving || !authToken ? 'bg-ink-100' : 'bg-brand-600'}`}>
+          <Text className={`font-semibold text-[15px] ${saving || !authToken ? 'text-ink-400' : 'text-white'}`}>{saving ? 'Saving...' : 'Continue to Location'}</Text>
         </Pressable>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -382,22 +579,81 @@ export function SellBasicScreen() {
 export function SellLocationScreen() {
   const { go, back, ctx } = useNav();
   const { authToken } = useAppState();
-  const [data, setData] = useState({ building: '', area: '', city: 'Chennai', pin: '' });
+  const [data, setData] = useState(() => hydrateSellAddress(ctx, ctx?.sellRequest));
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const valid = !!(data.building && data.pin.length === 6 && authToken && ctxSellRequestId(ctx));
+  const { scrollRef, registerForm, registerField, scrollToField } = useSellFormScroll();
+  const set = (patch: Partial<typeof data>) => {
+    setData((current) => ({ ...current, ...patch }));
+    Object.keys(patch).forEach((key) => setFieldErrors((current) => clearFieldError(current, key)));
+  };
+  const blurField = (key: keyof typeof data) => {
+    const next = validateSellAddress({ ...data });
+    setFieldErrors((current) => {
+      const updated = { ...current };
+      if (next[key]) updated[String(key)] = next[key];
+      else delete updated[String(key)];
+      return updated;
+    });
+  };
+  const handleMapLocation = useCallback((location: DetectedLocation | null) => {
+    if (!location || !isValidCoordinate(location.latitude, location.longitude)) return;
+    setData((current) => {
+      const movedFar =
+        current.latitude == null ||
+        current.longitude == null ||
+        distanceMeters(
+          { latitude: current.latitude, longitude: current.longitude },
+          { latitude: location.latitude, longitude: location.longitude },
+        ) > 120;
+      const nextPin = location.postalCode && /^\d{6}$/.test(location.postalCode) ? location.postalCode : current.pin;
+      const nextCity = (location.city || current.city).replace(/[^A-Za-z .'-]/g, ' ').replace(/\s+/g, ' ').trim();
+      return {
+        ...current,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        ...(movedFar
+          ? {
+              building: location.street || current.building,
+              area: location.locality || current.area,
+              city: nextCity || current.city,
+              pin: nextPin,
+              state: location.state || current.state,
+              country: location.country || current.country || 'India',
+              formattedAddress: location.formattedAddress || current.formattedAddress,
+            }
+          : {
+              formattedAddress: location.formattedAddress || current.formattedAddress,
+            }),
+      };
+    });
+    setFieldErrors((current) => clearFieldError(clearFieldError(current, 'coordinates'), 'city'));
+  }, []);
   const saveAndContinue = async () => {
-    if (!valid || saving || !authToken) return;
+    if (saving || !authToken) return;
+    const errors = validateSellAddress(data);
+    setFieldErrors(errors);
+    if (!isSectionValid(errors)) {
+      scrollToField(firstErrorKey(errors) === 'coordinates' ? 'building' : firstErrorKey(errors));
+      return;
+    }
+    if (!ctxSellRequestId(ctx)) {
+      setError('Listing draft is missing. Go back and start again.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
       const sellRequest = await updateSellRequest(authToken, ctxSellRequestId(ctx), {
         address: {
-          street: data.building,
-          locality: data.area || null,
-          city: data.city,
-          state: 'Tamil Nadu',
+          street: data.building.trim(),
+          locality: data.area.trim() || null,
+          city: data.city.trim(),
+          state: data.state.trim() || null,
           pincode: data.pin,
+          latitude: data.latitude ?? undefined,
+          longitude: data.longitude ?? undefined,
         },
         draftStep: 3,
       });
@@ -408,37 +664,81 @@ export function SellLocationScreen() {
       setSaving(false);
     }
   };
+  const savedCoordinate =
+    data.latitude != null && data.longitude != null && isValidCoordinate(data.latitude, data.longitude)
+      ? { latitude: data.latitude, longitude: data.longitude }
+      : null;
   return (
-    <Screen padBottom>
+    <Screen fill>
       <SellHeader step={2} back={back} title="Location & Address" />
       {!!error && <ErrorCard message={error} />}
-      <View className="px-4 mt-4 gap-4">
-        <View className="bg-ink-100 h-36 rounded-card border border-ink-200 items-center justify-end pb-2">
-          <Pressable
-            onPress={() => setData({ ...data, area: data.area || 'Adyar', pin: data.pin || '600020', building: data.building || 'Sunrise Heights' })}
-            className="bg-white px-2 py-1 rounded shadow flex-row items-center gap-1"
-          >
-            <Icon name="locate-fixed" size={10} color="#1A6FFF" /><Text className="text-[10.5px] font-semibold">Use current</Text>
-          </Pressable>
-        </View>
-        <Field label="Building / Society" required><Input icon="building-2" placeholder="e.g. Sunrise Heights" value={data.building} onChangeText={(v) => setData({ ...data, building: v })} /></Field>
-        <Field label="Area / Locality"><Input icon="map" placeholder="e.g. Adyar" value={data.area} onChangeText={(v) => setData({ ...data, area: v })} /></Field>
-        <View className="flex-row gap-3">
-          <View className="flex-1"><Field label="City"><Input icon="map-pin" value={data.city} onChangeText={(v) => setData({ ...data, city: v })} /></Field></View>
-          <View className="flex-1"><Field label="Pincode" required><Input maxLength={6} keyboardType="numeric" placeholder="6-digit" value={data.pin} onChangeText={(v) => setData({ ...data, pin: v.replace(/\D/g, '') })} /></Field></View>
-        </View>
-      </View>
-      <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={!valid || saving} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${valid && !saving ? 'bg-brand-600' : 'bg-ink-100'}`}>
-          <Text className={`font-semibold text-[15px] ${valid && !saving ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : 'Continue'}</Text>
+      {!!fieldErrors.coordinates && <ErrorCard message={fieldErrors.coordinates} />}
+      <PageBody className="mt-3">
+        <LocationPickerMap
+          initialCoordinate={savedCoordinate}
+          selectable
+          autoDetect
+          autoTrack
+          showSearch
+          showTrackingToggle
+          height={250}
+          onLocationChange={handleMapLocation}
+        />
+      </PageBody>
+      <PageBody className="mt-3 flex-1" onLayout={(e) => registerForm(e.nativeEvent.layout.y)}>
+        <ScrollView
+          ref={scrollRef}
+          className="flex-1"
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View className="gap-4 pb-4">
+            <View onLayout={(e) => registerField('building', e.nativeEvent.layout.y)}>
+              <Field label="Building / Society" required error={fieldErrors.building}>
+                <Input icon="building-2" placeholder="e.g. Sunrise Heights" value={data.building} invalid={!!fieldErrors.building} maxLength={SELL_LIMITS.streetMax} onChangeText={(v) => set({ building: v })} onBlur={() => blurField('building')} />
+              </Field>
+            </View>
+            <View onLayout={(e) => registerField('area', e.nativeEvent.layout.y)}>
+              <Field label="Area / Locality" hint="Optional" error={fieldErrors.area}>
+                <Input icon="map" placeholder="e.g. Adyar" value={data.area} invalid={!!fieldErrors.area} maxLength={SELL_LIMITS.localityMax} onChangeText={(v) => set({ area: v })} onBlur={() => blurField('area')} />
+              </Field>
+            </View>
+            <View className="flex-row gap-3">
+              <View className="flex-1" onLayout={(e) => registerField('city', e.nativeEvent.layout.y)}>
+                <Field label="City" required error={fieldErrors.city}>
+                  <Input icon="map-pin" value={data.city} invalid={!!fieldErrors.city} maxLength={SELL_LIMITS.cityMax} onChangeText={(v) => set({ city: v })} onBlur={() => blurField('city')} />
+                </Field>
+              </View>
+              <View className="flex-1" onLayout={(e) => registerField('pin', e.nativeEvent.layout.y)}>
+                <Field label="Pincode" required error={fieldErrors.pin}>
+                  <Input maxLength={6} keyboardType="numeric" placeholder="6-digit" value={data.pin} invalid={!!fieldErrors.pin} onChangeText={(v) => set({ pin: digitsOnly(v).slice(0, 6) })} onBlur={() => blurField('pin')} />
+                </Field>
+              </View>
+            </View>
+            {(data.state || data.country) && (
+              <Text className="text-[11px] text-ink-500">
+                {[data.state, data.country].filter(Boolean).join(', ')}
+                {data.latitude != null && data.longitude != null ? ` · ${data.latitude.toFixed(5)}, ${data.longitude.toFixed(5)}` : ''}
+              </Text>
+            )}
+          </View>
+        </ScrollView>
+      </PageBody>
+      <PageBody className="mt-2 mb-3">
+        <Pressable onPress={saveAndContinue} disabled={saving || !authToken} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${saving || !authToken ? 'bg-ink-100' : 'bg-brand-600'}`}>
+          <Text className={`font-semibold text-[15px] ${saving || !authToken ? 'text-ink-400' : 'text-white'}`}>{saving ? 'Saving...' : 'Confirm location'}</Text>
         </Pressable>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
 
 // ─── SL-06 Photo Upload ──────────────────────────────────────
 export function SellPhotosScreen() {
+  const layout = useLayout();
+  const photoCols = layout.isTablet ? 4 : 3;
+  const photoGap = layout.gap;
+  const photoW = gridItemWidth(layout.contentWidth - layout.gutter * 2 - 28, photoCols, photoGap); // inner card padding ~14*2
   const { go, back, ctx } = useNav();
   const { authToken } = useAppState();
   const sellRequestId = ctxSellRequestId(ctx);
@@ -448,7 +748,8 @@ export function SellPhotosScreen() {
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const MIN = 5;
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const MIN = SELL_LIMITS.photosMin;
   const totalSelected = existingPhotos.length + photos.length;
   useEffect(() => {
     if (!authToken || !sellRequestId) return;
@@ -474,20 +775,39 @@ export function SellPhotosScreen() {
 
     if (result.canceled) return;
 
+    const rejected: string[] = [];
+    const accepted = result.assets.filter((asset) => {
+      if (asset.type === 'video') {
+        rejected.push('Videos are not allowed. Upload photos only.');
+        return false;
+      }
+      const photoError = validatePhotoAsset(asset);
+      if (photoError) {
+        rejected.push(photoError);
+        return false;
+      }
+      return true;
+    });
     setPhotos((current) => {
       const next = [...current];
-      result.assets
-        .filter((asset) => asset.type !== 'video')
-        .forEach((asset) => {
-          if (!next.some((photo) => photo.uri === asset.uri)) next.push(asset);
-        });
-      return next;
+      accepted.forEach((asset) => {
+        if (!next.some((photo) => photo.uri === asset.uri)) next.push(asset);
+      });
+      return next.slice(0, SELL_LIMITS.photosMax - existingPhotos.length);
     });
+    if (rejected.length) {
+      setFieldErrors({ photos: rejected[0] });
+    } else {
+      setFieldErrors((current) => clearFieldError(current, 'photos'));
+    }
   };
   const removePhoto = (uri: string) => setPhotos((current) => current.filter((photo) => photo.uri !== uri));
   const removeExistingPhoto = (url: string) => setExistingPhotos((current) => current.filter((photo) => photo !== url));
   const saveAndContinue = async () => {
-    if (totalSelected < MIN || saving || !authToken || !sellRequestId) return;
+    if (saving || !authToken || !sellRequestId) return;
+    const errors = validateSellPhotos(totalSelected, photos);
+    setFieldErrors(errors);
+    if (!isSectionValid(errors)) return;
     setSaving(true);
     setError('');
     try {
@@ -528,7 +848,7 @@ export function SellPhotosScreen() {
             fileUrl: doc.url,
           })),
         ],
-        draftStep: 4,
+        draftStep: 5,
       });
       go('sellAmenities', { ...ctx, photos: allPhotoUrls, sellRequest: updatedSellRequest, sellRequestId: sellRequestIdOf(updatedSellRequest) });
     } catch (e) {
@@ -541,39 +861,40 @@ export function SellPhotosScreen() {
     <Screen padBottom>
       <SellHeader step={4} back={back} title="Add Photos" />
       {!!error && <ErrorCard message={error} />}
+      {!!fieldErrors.photos && <ErrorCard message={fieldErrors.photos} />}
       {!sellRequestId && <ErrorCard message="Listing draft is missing. Go back and reopen this draft from My Listings." />}
-      <View className="px-4 mt-4 gap-4">
+      <PageBody className="mt-4 gap-4">
         <View className="rounded-card border border-brand-100 bg-brand-50/50 p-3.5">
           <View className="flex-row items-start justify-between gap-3 mb-3">
             <View className="flex-1">
               <Text className="text-[15px] font-bold text-ink-900">Property photos</Text>
-              <Text className="text-[12px] text-ink-500 mt-0.5">Add at least {MIN} photos. The first one becomes your cover.</Text>
+              <Text className="text-[12px] text-ink-500 mt-0.5">Add at least {MIN} photos (JPG, PNG or WEBP, max 25MB each). The first one becomes your cover.</Text>
             </View>
             <View className="rounded-full bg-white px-3 py-1 border border-brand-100">
               <Text className="text-[11px] font-bold text-brand-700">{totalSelected} selected</Text>
             </View>
           </View>
 
-          <View className="flex-row flex-wrap gap-2 mb-3">
+          <View className="flex-row flex-wrap mb-3" style={{ gap: photoGap }}>
             {existingPhotos.map((photoUrl, i) => (
-              <View key={`existing-${i}`} style={{ width: '31%' }} className="aspect-square relative">
+              <View key={`existing-${i}`} style={{ width: photoW }} className="aspect-square relative">
                 <Image source={{ uri: photoUrl }} className="rounded-card w-full h-full bg-ink-100" resizeMode="cover" />
                 {i === 0 && <View className="absolute top-1 left-1 bg-emerald-600 px-1.5 py-0.5 rounded"><Text className="text-white text-[9px] font-bold">COVER</Text></View>}
-                <Pressable onPress={() => removeExistingPhoto(photoUrl)} className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-rose-500 items-center justify-center">
+                <Pressable onPress={() => removeExistingPhoto(photoUrl)} hitSlop={8} className="absolute -top-1.5 -right-1.5 w-7 h-7 rounded-full bg-rose-500 items-center justify-center">
                   <Icon name="x" size={12} color="white" />
                 </Pressable>
               </View>
             ))}
             {photos.map((photo, i) => (
-              <View key={`new-${i}-${photo.assetId ?? photo.uri}`} style={{ width: '31%' }} className="aspect-square relative">
+              <View key={`new-${i}-${photo.assetId ?? photo.uri}`} style={{ width: photoW }} className="aspect-square relative">
                 <Image source={{ uri: photo.uri }} className="rounded-card w-full h-full bg-ink-100" resizeMode="cover" />
                 {existingPhotos.length === 0 && i === 0 && <View className="absolute top-1 left-1 bg-emerald-600 px-1.5 py-0.5 rounded"><Text className="text-white text-[9px] font-bold">COVER</Text></View>}
-                <Pressable onPress={() => removePhoto(photo.uri)} className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-rose-500 items-center justify-center">
+                <Pressable onPress={() => removePhoto(photo.uri)} hitSlop={8} className="absolute -top-1.5 -right-1.5 w-7 h-7 rounded-full bg-rose-500 items-center justify-center">
                   <Icon name="x" size={12} color="white" />
                 </Pressable>
               </View>
             ))}
-            <Pressable onPress={pickPhotos} style={{ width: '31%' }} className="aspect-square rounded-card border-2 border-dashed border-brand-300 bg-white items-center justify-center">
+            <Pressable onPress={pickPhotos} style={{ width: photoW }} className="aspect-square rounded-card border-2 border-dashed border-brand-300 bg-white items-center justify-center">
               <View className="w-9 h-9 rounded-full bg-brand-50 items-center justify-center mb-1">
                 <Icon name="plus" size={22} color="#1A6FFF" />
               </View>
@@ -598,12 +919,12 @@ export function SellPhotosScreen() {
         {['Shoot in daylight with windows open', 'Wide-angle covers more of each room', 'Tidy clutter before each shot'].map((t) => (
           <View key={t} className="flex-row gap-2 mb-1.5"><Icon name="check" size={14} color="#10B981" /><Text className="text-[12px] text-ink-700 flex-1">{t}</Text></View>
         ))}
-      </View>
-      <View className="px-4 mt-4">
-        <Pressable onPress={saveAndContinue} disabled={totalSelected < MIN || saving || !sellRequestId} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${totalSelected >= MIN && !saving && sellRequestId ? 'bg-brand-600' : 'bg-ink-100'}`}>
-          <Text className={`font-semibold text-[15px] ${totalSelected >= MIN && !saving && sellRequestId ? 'text-white' : 'text-ink-400'}`}>{saving ? 'Saving...' : `Continue (${totalSelected}/${MIN} photos)`}</Text>
+      </PageBody>
+      <PageBody className="mt-4">
+        <Pressable onPress={saveAndContinue} disabled={saving || !sellRequestId || !authToken} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${saving || !sellRequestId || !authToken ? 'bg-ink-100' : 'bg-brand-600'}`}>
+          <Text className={`font-semibold text-[15px] ${saving || !sellRequestId || !authToken ? 'text-ink-400' : 'text-white'}`}>{saving ? 'Saving...' : `Continue (${totalSelected}/${MIN} photos)`}</Text>
         </Pressable>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -611,20 +932,39 @@ export function SellPhotosScreen() {
 // ─── SL-05 Amenities ─────────────────────────────────────────
 export function SellAmenitiesScreen() {
   const { go, back, ctx } = useNav();
+  const layout = useLayout();
+  const cols = layout.isTablet ? 4 : 3;
+  const gap = layout.gap;
+  const itemW = gridItemWidth(layout.contentWidth - layout.gutter * 2, cols, gap);
   const { authToken } = useAppState();
-  const [sel, setSel] = useState<Set<string>>(new Set(['Lift', 'Parking', 'Power Backup', 'Security']));
+  const type = ctx?.type || ctx?.sellRequest?.propertyType || 'apartment';
+  const visible = sellFieldVisibility(type);
+  const [sel, setSel] = useState<Set<string>>(() => {
+    const saved = (ctx?.amenities ?? ctx?.sellRequest?.amenities) as string[] | undefined;
+    if (Array.isArray(saved) && saved.length) return new Set(saved);
+    return new Set();
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const toggle = (l: string) => { const s = new Set(sel); s.has(l) ? s.delete(l) : s.add(l); setSel(s); };
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const toggle = (l: string) => {
+    const s = new Set(sel);
+    s.has(l) ? s.delete(l) : s.add(l);
+    setSel(s);
+    setFieldErrors((current) => clearFieldError(current, 'amenities'));
+  };
   const extra = ['Modular Kitchen', 'Marble flooring', 'Wooden flooring', 'AC', 'RO water', 'Geyser', 'Wardrobes', 'Balcony'];
   const all = [...SPECS, ...extra.map((l) => ({ label: l, icon: 'sparkles' }))];
   const saveAndContinue = async () => {
     if (saving || !authToken || !ctxSellRequestId(ctx)) return;
+    const amenities = Array.from(sel);
+    const errors = validateSellAmenities(amenities, type);
+    setFieldErrors(errors);
+    if (!isSectionValid(errors)) return;
     setSaving(true);
     setError('');
     try {
-      const amenities = Array.from(sel);
-      const sellRequest = await updateSellRequest(authToken, ctxSellRequestId(ctx), { amenities, draftStep: 5 });
+      const sellRequest = await updateSellRequest(authToken, ctxSellRequestId(ctx), { amenities, draftStep: 6 });
       go('sellPrice', { ...ctx, amenities, sellRequest, sellRequestId: sellRequestIdOf(sellRequest) });
     } catch (e) {
       setError(apiMessage(e, 'Unable to save amenities.'));
@@ -636,20 +976,24 @@ export function SellAmenitiesScreen() {
     <Screen padBottom>
       <SellHeader step={5} back={back} title="Amenities" />
       {!!error && <ErrorCard message={error} />}
-      <View className="px-4 mt-4">
-        <Text className="text-[12px] text-ink-500 mb-3">Selected <Text className="text-emerald-700 font-bold">{sel.size}</Text> of {all.length}</Text>
-        <View className="flex-row flex-wrap gap-2">
+      {!!fieldErrors.amenities && <ErrorCard message={fieldErrors.amenities} />}
+      <PageBody className="mt-4">
+        <Text className="text-[12px] text-ink-500 mb-3">
+          Selected <Text className="text-emerald-700 font-bold">{sel.size}</Text> of {all.length}
+          {visible.amenitiesRequired ? <Text className="text-ink-500"> · at least one required</Text> : <Text className="text-ink-500"> · optional for this property type</Text>}
+        </Text>
+        <View className="flex-row flex-wrap" style={{ gap }}>
           {all.map((a) => (
-            <Pressable key={a.label} onPress={() => toggle(a.label)} style={{ width: '31%' }} className={`p-2.5 rounded-card border items-center gap-1.5 ${sel.has(a.label) ? 'border-emerald-500 bg-emerald-50' : 'border-ink-200'}`}>
+            <Pressable key={a.label} onPress={() => toggle(a.label)} style={{ width: itemW }} className={`p-2.5 rounded-card border items-center gap-1.5 min-h-[76px] ${sel.has(a.label) ? 'border-emerald-500 bg-emerald-50' : 'border-ink-200'}`}>
               <Icon name={a.icon} size={18} color={sel.has(a.label) ? '#059669' : '#94A3B8'} />
-              <Text className="text-[10px] text-center font-medium leading-caption">{a.label}</Text>
+              <Text className="text-[10px] text-center font-medium leading-caption" numberOfLines={2}>{a.label}</Text>
             </Pressable>
           ))}
         </View>
-      </View>
-      <View className="px-4 mt-4">
+      </PageBody>
+      <PageBody className="mt-4">
         <Btn className="w-full" disabled={saving || !authToken} onPress={saveAndContinue}>{saving ? 'Saving...' : 'Continue to Pricing'}</Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -662,7 +1006,7 @@ export function SellerDashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const loadListings = async (force = false) => {
+  const loadListings = async (force = false, silent = false) => {
     if (!authToken) {
       setError('Please sign in again to view your listings.');
       setLoading(false);
@@ -677,8 +1021,8 @@ export function SellerDashboardScreen() {
       return;
     }
 
-    if (force) setRefreshing(true);
-    else setLoading(true);
+    if (force && !silent) setRefreshing(true);
+    else if (!silent) setLoading(true);
     setError('');
     try {
       const nextListings = await listSellRequests(authToken, { limit: 50, sort: 'newest' });
@@ -692,6 +1036,7 @@ export function SellerDashboardScreen() {
     }
   };
   useEffect(() => { loadListings(); }, [authToken]);
+  usePolling(() => loadListings(true, true), 15000, Boolean(authToken));
   const activeCount = listings.filter((listing) => listing.status !== 'draft').length;
   const draftCount = listings.filter((listing) => listing.status === 'draft').length;
   return (
@@ -708,7 +1053,7 @@ export function SellerDashboardScreen() {
       />
       {!!error && <ErrorCard message={error} onRetry={loadListings} />}
       {loading && <LoadingBlock label="Loading seller listings..." />}
-      <View className="px-4">
+      <PageBody>
         <Text className="text-[14px] font-semibold mb-2">Your listings</Text>
         {!loading && !error && listings.length === 0 ? (
           <EmptyState icon="tag" title="No sell requests yet." action="List a Property" onPress={() => go('sellTypes')} />
@@ -739,7 +1084,7 @@ export function SellerDashboardScreen() {
           ))}
         </View>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -752,7 +1097,7 @@ export function SellEnquiriesScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('all');
-  const loadRequests = async () => {
+  const loadRequests = async (force = false) => {
     if (!authToken) {
       setError('Please sign in again to view seller enquiries.');
       setLoading(false);
@@ -760,13 +1105,13 @@ export function SellEnquiriesScreen() {
     }
     const cacheKey = `${SELL_LISTINGS_CACHE_PREFIX}:${authToken}`;
     const cached = getCachedValue<SellRequest[]>(cacheKey);
-    if (cached) {
+    if (cached && !force) {
       setRequests(cached);
       setLoading(false);
       setError('');
       return;
     }
-    setLoading(true);
+    setLoading(!cached);
     setError('');
     try {
       const nextRequests = await listSellRequests(authToken, { limit: 50, sort: 'newest' });
@@ -779,6 +1124,7 @@ export function SellEnquiriesScreen() {
     }
   };
   useEffect(() => { loadRequests(); }, [authToken]);
+  usePolling(() => loadRequests(true), 15000, Boolean(authToken));
   const list = requests.filter((request) => (tab === 'all' ? true : (request.status ?? 'draft') === tab));
   const totalEnquiries = requests.reduce((sum, request) => sum + (request.metrics?.enquiryCount ?? 0), 0);
   return (
@@ -786,7 +1132,7 @@ export function SellEnquiriesScreen() {
       <TopBar onBack={back} title="Buyer enquiries" sub={`${totalEnquiries} tracked interest`} />
       {!!error && <ErrorCard message={error} onRetry={loadRequests} />}
       {loading && <LoadingBlock label="Loading seller enquiry context..." />}
-      <View className="px-4">
+      <PageBody>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }} className="mb-2">
           {['all', 'new', 'active', 'negotiating', 'sold'].map((t) => (
             <Chip key={t} active={tab === t} onPress={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</Chip>
@@ -805,7 +1151,9 @@ export function SellEnquiriesScreen() {
                     <Text className="text-[10.5px] text-ink-500">{request.metrics?.enquiryCount ?? 0} enquiries · {request.metrics?.saveCount ?? 0} saves</Text>
                   </View>
                 </View>
-                <Text className="text-[12.5px] text-ink-700 mt-2 leading-relaxed">Buyer-level enquiry records are not exposed to seller APIs yet. This card uses listing-level metrics from your sell request.</Text>
+                <Text className="text-[12.5px] text-ink-700 mt-2 leading-relaxed">
+                  {request.metrics?.enquiryCount ?? 0} buyer enquiries and {request.metrics?.visitCount ?? 0} visits tracked for this listing.
+                </Text>
                 <View className="flex-row gap-2 mt-2.5">
                   <Btn size="sm" variant="outline" icon="calendar" onPress={() => go('sellVisitMgmt', { sellRequest: request, sellRequestId: sellRequestIdOf(request) })}>Visits</Btn>
                   <Btn size="sm" icon="message-circle" onPress={() => go('sellChat', { sellRequest: request, sellRequestId: sellRequestIdOf(request) })}>Request callback</Btn>
@@ -814,7 +1162,7 @@ export function SellEnquiriesScreen() {
             ))}
           </View>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -860,7 +1208,7 @@ export function SellVisitMgmtScreen() {
       {!!error && <ErrorCard message={error} onRetry={load} />}
       {!!actionError && <ErrorCard message={actionError} />}
       {loading && <LoadingBlock label="Loading seller visit activity..." />}
-      <View className="px-4">
+      <PageBody>
         <Text className="text-[13px] font-semibold mb-2">Visit requests</Text>
         {visits.length === 0 ? (
           <View className="rounded-card border border-ink-200 p-4">
@@ -898,13 +1246,15 @@ export function SellVisitMgmtScreen() {
             ))}
           </View>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
 
 // ─── SL-12 Negotiation Chat ──────────────────────────────────
 export function SellChatScreen() {
+  const layout = useLayout();
+  const bubbleMaxWidth = Math.round(layout.contentWidth * (layout.isTablet ? 0.62 : layout.isPhoneSm ? 0.88 : 0.82));
   const { back, ctx } = useNav();
   const { authToken, sellRequestId, activity, setActivity, loading, error, load } = useSellerActivityContext(ctx);
   const insets = useSafeAreaInsets();
@@ -1017,17 +1367,17 @@ export function SellChatScreen() {
   };
   return (
     <Screen fill>
-      <View className="px-4 pt-2 pb-3 flex-row items-center gap-3 border-b border-ink-200 bg-white">
-        <Pressable onPress={back} className="-ml-1 p-2 rounded-full"><Icon name="arrow-left" size={20} color="#0F172A" /></Pressable>
+      <View className="pt-2 pb-3 flex-row items-center gap-3 border-b border-ink-200 bg-white" style={{ paddingHorizontal: layout.gutter }}>
+        <Pressable onPress={back} hitSlop={8} className="-ml-1 min-w-[44px] min-h-[44px] items-center justify-center rounded-full"><Icon name="arrow-left" size={20} color="#0F172A" /></Pressable>
         <View className="w-10 h-10 rounded-full bg-brand-100 items-center justify-center"><Icon name="headphones" size={16} color="#1A6FFF" /></View>
-        <View className="flex-1">
-          <Text className="text-[14px] font-semibold">{sellRequestTitle(ctx?.sellRequest)}</Text>
+        <View className="flex-1 min-w-0">
+          <Text className="text-[14px] font-semibold" numberOfLines={1}>{sellRequestTitle(ctx?.sellRequest)}</Text>
           <Text className="text-[10.5px] text-emerald-600">● Messages saved</Text>
         </View>
         <Pressable onPress={requestCallback} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center"><Icon name="phone" size={14} color="#0F172A" /></Pressable>
       </View>
-      {!!status && <View className="px-4 py-2 bg-brand-50"><Text className="text-[12px] text-brand-700">{status}</Text></View>}
-      {!!error && <View className="px-4 py-2 bg-rose-50"><Text className="text-[12px] text-rose-700" onPress={() => load()}>{error}</Text></View>}
+      {!!status && <View className="py-2 bg-brand-50" style={{ paddingHorizontal: layout.gutter }}><Text className="text-[12px] text-brand-700">{status}</Text></View>}
+      {!!error && <View className="py-2 bg-rose-50" style={{ paddingHorizontal: layout.gutter }}><Text className="text-[12px] text-rose-700" onPress={() => load()}>{error}</Text></View>}
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -1039,7 +1389,7 @@ export function SellChatScreen() {
         </View>
         {loading && <Text className="text-center text-[12px] text-ink-500">Loading negotiation activity...</Text>}
         {!loading && messages.length === 0 && (
-          <View className="self-center max-w-[84%] px-3 py-2 rounded-2xl bg-white border border-ink-200 shadow-sm">
+          <View className="self-center px-3 py-2 rounded-2xl bg-white border border-ink-200 shadow-sm" style={{ maxWidth: bubbleMaxWidth }}>
             <Text className="text-[13px] text-ink-900">No negotiation messages are linked yet. Send a message and Builtglory will follow up on this listing.</Text>
           </View>
         )}
@@ -1047,7 +1397,7 @@ export function SellChatScreen() {
           const mine = m.sender === 'seller';
           return (
           <View key={`${m.threadId ?? m.logId ?? 'message'}-${i}`} className={`flex-row ${mine ? 'justify-end' : 'justify-start'}`}>
-            <View className={`max-w-[82%] px-3 py-2 shadow-sm ${mine ? 'bg-brand-600 rounded-t-2xl rounded-bl-2xl rounded-br-md' : 'bg-white border border-ink-200 rounded-t-2xl rounded-br-2xl rounded-bl-md'}`}>
+            <View className={`px-3 py-2 shadow-sm ${mine ? 'bg-brand-600 rounded-t-2xl rounded-bl-2xl rounded-br-md' : 'bg-white border border-ink-200 rounded-t-2xl rounded-br-2xl rounded-bl-md'}`} style={{ maxWidth: bubbleMaxWidth }}>
               <Text className={`text-[13px] leading-5 ${mine ? 'text-white' : 'text-ink-900'}`}>{m.text || (m.type === 'offer' ? 'Offer shared' : 'Message')}</Text>
               {!!m.offerAmount && (
                 <View className={`mt-1.5 -mx-2 -mb-1 px-2 py-1.5 rounded-md ${mine ? 'bg-white/15' : 'bg-emerald-50'}`}>
@@ -1066,10 +1416,13 @@ export function SellChatScreen() {
         })}
       </ScrollView>
       <View
-        className="px-3 pt-2 border-t border-ink-200 bg-white"
+        className="pt-2 border-t border-ink-200 bg-white"
         style={{
+          paddingHorizontal: layout.gutter,
           marginBottom: keyboardBottomInset + composerKeyboardGap,
           paddingBottom: keyboardVisible ? 6 : Math.max(insets.bottom, 12),
+          paddingLeft: Math.max(layout.gutter, insets.left || 0),
+          paddingRight: Math.max(layout.gutter, insets.right || 0),
         }}
       >
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }} className="mb-2">

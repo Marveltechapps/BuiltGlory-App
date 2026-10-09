@@ -36,6 +36,7 @@ export const SCREEN_GROUPS: { group: string; items: { key: string; label: string
       { key: 'upcoming', label: 'Upcoming List', Comp: Home.UpcomingListScreen },
       { key: 'help', label: 'Help & Support', Comp: Home.HelpScreen },
       { key: 'supportTickets', label: 'Support Tickets', Comp: Home.SupportTicketsScreen },
+      { key: 'liveChat', label: 'Live Chat', Comp: Home.LiveChatScreen },
       { key: 'supportTicketChat', label: 'Support Ticket Chat', Comp: Home.SupportTicketChatScreen },
     ],
   },

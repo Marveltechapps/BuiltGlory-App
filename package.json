@@ -48,10 +48,11 @@
     "typescript": "~5.9.2"
   },
   "scripts": {
-    "start": "expo start --go --lan",
-    "start:go": "expo start --go --lan",
-    "start:tunnel": "expo start --go --tunnel",
-    "start:dev": "expo start --dev-client --lan",
+    "start": "node scripts/start-expo-go.mjs",
+    "start:go": "node scripts/start-expo-go.mjs",
+    "start:lan": "node scripts/start-expo-go.mjs",
+    "setup:lan-firewall": "node scripts/setup-lan-firewall.mjs",
+    "start:dev": "expo start --dev-client --host lan",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",

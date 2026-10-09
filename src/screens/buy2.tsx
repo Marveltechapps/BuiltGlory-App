@@ -1,17 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Linking, View, Text, Pressable } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import Icon from '../components/Icon';
-import { Screen, TopBar, Field, DocCard, Btn, PhotoPlaceholder, Toast, useToast, Sheet, Spinner, SuccessBurst, ShakeView } from '../components/shared';
+import { Screen, TopBar, Field, Input, DocCard, Btn, PhotoPlaceholder, Toast, useToast, Sheet, Spinner, SuccessBurst, ShakeView, PageBody } from '../components/shared';
 import { formatINR } from '../data/data';
 import { useFlowCompletionBack, useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
 import { usePolling } from '../hooks/usePolling';
 import { BUY_ENQUIRIES_CACHE_PREFIX } from '../state/primaryTabCache';
 import { enquiryId, formatPaymentStatus } from '../utils/buyEnquiryStatus';
+import { validateDocumentAsset } from '../utils/sellValidation';
 import {
   BuyEnquiry,
   cancelBuyEnquiry,
+  cancelTokenPayment,
   createTokenPayment,
   CustomerPayment,
   CustomerProperty,
@@ -20,6 +23,7 @@ import {
   getCustomerProperty,
   getPublicAppConfig,
   listCustomerPayments,
+  uploadCustomerDocument,
 } from '../api/customer';
 
 type PaymentConfig = {
@@ -174,7 +178,7 @@ export function DocumentsSharedScreen() {
       {offline && <OfflineCard onRetry={reload} />}
       {error && <ErrorCard message={error} onRetry={reload} />}
       {docError && <ErrorCard message={docError} />}
-      <View className="px-4">
+      <PageBody>
         <View className="flex-row items-center gap-2.5 p-3 rounded-card bg-brand-50 mb-4">
           <View className="w-8 h-8 rounded-full bg-brand-600 items-center justify-center"><Icon name="bell" size={15} color="white" /></View>
           <Text className="text-[12px] text-brand-800 leading-display-tight flex-1">Builtglory has shared your property documents. Tap any document to view.</Text>
@@ -202,25 +206,48 @@ export function DocumentsSharedScreen() {
           <Text className="text-[11.5px] text-ink-600 flex-1">All documents are legally verified by the Builtglory team.</Text>
         </View>
         <Btn className="w-full mt-4" icon="credit-card" onPress={() => go('payment', { enquiryId, enquiry, refresh: true })}>Proceed to Token Payment</Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
 
+function proofFileName(asset: ImagePicker.ImagePickerAsset) {
+  const extension = (asset.mimeType || '').split('/')[1] || asset.uri.split('.').pop() || 'jpg';
+  return asset.fileName?.trim() || `payment-proof.${extension}`;
+}
+
+function proofMimeType(asset: ImagePicker.ImagePickerAsset) {
+  if (asset.mimeType) return asset.mimeType;
+  return asset.uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+}
+
 // ─── B-15 Payment ────────────────────────────────────────────
 export function PaymentScreen() {
-  const { go, completeTo, back, ctx } = useNav();
+  const { completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const { enquiry, enquiryId, loading, error: enquiryError, offline, reload, refresh, refreshing } = useBuyEnquiryResource(ctx);
   const [payments, setPayments] = useState<CustomerPayment[]>([]);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [method, setMethod] = useState('bank');
+  const [method, setMethod] = useState<'bank' | 'cash'>('bank');
   const [status, setStatus] = useState<'idle' | 'processing'>('idle');
   const [copied, setCopied] = useState('');
+  const [transactionReference, setTransactionReference] = useState('');
+  const [notes, setNotes] = useState('');
+  const [proofName, setProofName] = useState('');
+  const [proofDocumentId, setProofDocumentId] = useState('');
   const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
   const tokenAmount = paymentConfig?.tokenAmount ?? 0;
   const escrow = paymentConfig?.escrow ?? null;
   const configReady = !!paymentConfig && !!escrow && tokenAmount > 0;
+  const dealId = String((enquiry as any)?.dealId ?? (enquiry as any)?.deal?._id ?? (enquiry as any)?.deal?.id ?? '');
+  const latestPayment = dealId
+    ? payments.find((item) => String(item.dealId ?? '') === dealId)
+    : undefined;
+  const awaitingConfirmation = latestPayment?.status === 'pending' || latestPayment?.status === 'created';
+  const paymentPaid = latestPayment?.status === 'paid';
+  const paymentRejected = latestPayment?.status === 'rejected' || latestPayment?.status === 'failed';
+  const paymentCancelled = latestPayment?.status === 'cancelled';
+  const canSubmit = !awaitingConfirmation && !paymentPaid;
   const copy = async (key: string, value?: string) => {
     if (!value) return;
     await Clipboard.setStringAsync(value);
@@ -252,20 +279,77 @@ export function PaymentScreen() {
     }
   }, [authToken]);
   usePolling(() => loadPayments(true), 10000, Boolean(authToken));
-  const pay = async () => {
-    if (!authToken) {
-      setPaymentError('Please sign in again before creating a token payment.');
+  useEffect(() => {
+    if (paymentPaid && enquiryId) {
+      completeTo('registrationDetails', { enquiryId, enquiry, payment: latestPayment, refresh: true });
+    }
+  }, [completeTo, enquiry, enquiryId, latestPayment, paymentPaid]);
+  const pickProof = async () => {
+    if (!authToken || !dealId) {
+      setPaymentError('A sales deal is required before payment proof can be uploaded.');
       return;
     }
-    const dealId = String((enquiry as any)?.dealId ?? (enquiry as any)?.deal?._id ?? (enquiry as any)?.deal?.id ?? '');
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setPaymentError('Photo library permission is required to upload payment proof.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      allowsEditing: false,
+      quality: 0.9,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    const fileError = validateDocumentAsset(asset);
+    if (fileError) {
+      setPaymentError(fileError);
+      return;
+    }
+    setStatus('processing');
+    try {
+      const uploaded = await uploadCustomerDocument(authToken, {
+        ownerType: 'sales_deal',
+        ownerId: dealId,
+        purpose: 'payment_proof',
+        documentType: 'token_payment_proof',
+        file: {
+          uri: asset.uri,
+          name: proofFileName(asset),
+          type: proofMimeType(asset),
+        },
+      });
+      setProofDocumentId(String(uploaded._id ?? uploaded.id ?? ''));
+      setProofName(uploaded.fileName || proofFileName(asset));
+      setPaymentError(null);
+    } catch {
+      setPaymentError('Could not upload payment proof. Please try again.');
+    } finally {
+      setStatus('idle');
+    }
+  };
+  const pay = async () => {
+    if (!authToken) {
+      setPaymentError('Please sign in again before submitting a token payment.');
+      return;
+    }
     if (!configReady) {
       setPaymentError('Token payment configuration is unavailable. Please retry before paying.');
       return;
     }
     if (!dealId) {
-      setPaymentError('A sales deal is required before token payment can be created.');
+      setPaymentError('A sales deal is required before token payment can be submitted.');
       return;
     }
+    if (paymentPaid) {
+      completeTo('registrationDetails', { enquiryId, enquiry, payment: latestPayment, refresh: true });
+      return;
+    }
+    if (method === 'bank' && !transactionReference.trim()) {
+      setPaymentError('Enter the bank transfer / UTR reference number after you pay.');
+      return;
+    }
+    if (status === 'processing' || awaitingConfirmation) return;
     setStatus('processing');
     setPaymentError(null);
     try {
@@ -274,14 +358,37 @@ export function PaymentScreen() {
         propertyId: typeof enquiry?.propertyId === 'string' ? enquiry.propertyId : idOf(enquiry?.propertyId),
         amount: tokenAmount,
         currency: 'INR',
-        idempotencyKey: `${dealId}-token-${Date.now()}`,
+        method,
+        transactionReference: transactionReference.trim() || undefined,
+        proofDocumentId: proofDocumentId || undefined,
+        notes: notes.trim() || undefined,
+        idempotencyKey: `${dealId}-token`,
       });
+      setPayments((current) => [payment, ...current.filter((item) => String(item._id ?? item.id) !== String(payment._id ?? payment.id))]);
       setStatus('idle');
-      completeTo(payment.status === 'failed' ? 'paymentFailure' : 'registrationDetails', { enquiryId, enquiry, payment, refresh: true });
+      if (payment.status === 'paid') {
+        completeTo('registrationDetails', { enquiryId, enquiry, payment, refresh: true });
+        return;
+      }
+      if (payment.status === 'failed' || payment.status === 'rejected') {
+        setPaymentError(payment.failureReason || payment.verificationNotes || 'This payment was not accepted.');
+      }
     } catch {
       setStatus('idle');
-      setPaymentError('Could not create the token payment order.');
-      go('paymentFailure', { enquiryId, enquiry, reason: 'Payment order could not be created.', refresh: true });
+      setPaymentError('Could not submit the payment for verification. Please try again.');
+    }
+  };
+  const cancelPending = async () => {
+    const paymentId = String(latestPayment?._id ?? latestPayment?.id ?? '');
+    if (!authToken || !paymentId || !awaitingConfirmation) return;
+    setStatus('processing');
+    try {
+      const cancelled = await cancelTokenPayment(authToken, paymentId);
+      setPayments((current) => current.map((item) => String(item._id ?? item.id) === paymentId ? cancelled : item));
+    } catch {
+      setPaymentError('Could not cancel this pending payment.');
+    } finally {
+      setStatus('idle');
     }
   };
   useEffect(() => {
@@ -289,10 +396,19 @@ export function PaymentScreen() {
     loadPayments();
   }, [loadPaymentConfig, loadPayments]);
   const methods = [
-    { id: 'bank', label: 'Bank Transfer', icon: 'building-2' },
-    { id: 'upi', label: 'UPI', icon: 'smartphone' },
-    { id: 'cheque', label: 'Cheque', icon: 'file-text' },
+    { id: 'bank' as const, label: 'Bank Transfer', icon: 'building-2' },
+    { id: 'cash' as const, label: 'In-person', icon: 'landmark' },
   ];
+  const bankRows = escrow
+    ? [
+        ['Account Holder', escrow.accountHolder, 'holder'],
+        ['Bank', escrow.bankName, 'bank'],
+        ['Account No.', escrow.accountNumber, 'acc'],
+        ['IFSC', escrow.ifsc, 'ifsc'],
+        ['Branch', escrow.branch, 'branch'],
+        ...(escrow.upiId ? [['UPI ID', escrow.upiId, 'upi'] as const] : []),
+      ]
+    : [];
   return (
     <Screen padBottom refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={back} title="Token Payment" />
@@ -300,21 +416,30 @@ export function PaymentScreen() {
       {offline && <OfflineCard onRetry={reload} />}
       {enquiryError && <ErrorCard message={enquiryError} onRetry={reload} />}
       {paymentError && <ErrorCard message={paymentError} onRetry={() => { loadPaymentConfig(); loadPayments(); }} />}
-      <View className="px-4">
+      <PageBody>
         <View className="rounded-card bg-brand-600 p-5 items-center mb-5">
-          <Text className="text-[12px] text-white/70 uppercase tracking-wider">Token Amount</Text>
+          <Text className="text-[12px] text-white/70 uppercase tracking-wider">Amount to pay</Text>
           <Text className="text-[36px] font-bold text-white leading-display mt-1">{configReady ? formatINR(tokenAmount) : 'Unavailable'}</Text>
-          <Text className="text-[12px] text-white/80">Refundable · Held in Builtglory escrow</Text>
+          <Text className="text-[12px] text-white/80 text-center mt-1">Pay this token amount to Builtglory by bank transfer or in person. It is marked paid only after the team verifies it.</Text>
         </View>
-        {!!payments.length && (
-          <View className="rounded-card bg-ink-50 p-3 mb-4">
+        {!!latestPayment && (
+          <View className={`rounded-card p-3 mb-4 ${paymentPaid ? 'bg-emerald-50 border border-emerald-200' : paymentRejected ? 'bg-rose-50 border border-rose-200' : 'bg-amber-50 border border-amber-200'}`}>
             <Text className="text-[12px] text-ink-500">Latest token payment</Text>
-            <Text className="text-[13px] font-semibold text-ink-900">{payments[0].referenceId ?? 'Payment'} · {formatPaymentStatus(payments[0].status)}</Text>
+            <Text className="text-[13px] font-semibold text-ink-900">{latestPayment.referenceId ?? 'Payment'} · {formatPaymentStatus(latestPayment.status)}</Text>
+            {awaitingConfirmation && (
+              <Text className="text-[12px] text-amber-800 mt-1">Submitted. Builtglory will verify the transfer or office payment before marking it paid. This screen updates automatically.</Text>
+            )}
+            {paymentRejected && (
+              <Text className="text-[12px] text-rose-800 mt-1">{latestPayment.verificationNotes || latestPayment.failureReason || 'This submission was not accepted. You can submit again with the correct details.'}</Text>
+            )}
+            {paymentCancelled && (
+              <Text className="text-[12px] text-ink-600 mt-1">This submission was cancelled. You can submit a new payment record.</Text>
+            )}
           </View>
         )}
         <View className="flex-row gap-2 mb-4">
           {methods.map((m) => (
-            <Pressable key={m.id} onPress={() => setMethod(m.id)} className={`flex-1 p-3 rounded-card border items-center gap-1.5 ${method === m.id ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
+            <Pressable key={m.id} onPress={() => canSubmit && setMethod(m.id)} className={`flex-1 p-3 rounded-card border items-center gap-1.5 ${method === m.id ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
               <Icon name={m.icon} size={18} color={method === m.id ? '#1A6FFF' : '#64748B'} />
               <Text className={`text-[11px] font-semibold ${method === m.id ? 'text-brand-700' : 'text-ink-600'}`}>{m.label}</Text>
             </Pressable>
@@ -323,12 +448,16 @@ export function PaymentScreen() {
         {!configReady && (
           <View className="rounded-card border border-amber-200 bg-amber-50 p-4 mb-4">
             <Text className="text-[13px] font-semibold text-amber-900">Payment details are loading from Builtglory.</Text>
-            <Text className="text-[12px] text-amber-800 mt-1">Static escrow details are not shown for security. Retry to load the latest account instructions.</Text>
+            <Text className="text-[12px] text-amber-800 mt-1">Company bank details are loaded from the live configuration. Retry if they do not appear.</Text>
           </View>
         )}
         {configReady && method === 'bank' && escrow && (
-          <View className="rounded-card border border-ink-200">
-            {[['Account Holder', escrow.accountHolder, 'holder'], ['Bank', escrow.bankName, 'bank'], ['Account No.', escrow.accountNumber, 'acc'], ['IFSC', escrow.ifsc, 'ifsc'], ['Branch', escrow.branch, 'branch']].map(([k, v, key], i) => (
+          <View className="rounded-card border border-ink-200 mb-4">
+            <View className="px-3 py-2.5 border-b border-ink-100">
+              <Text className="text-[12px] font-semibold text-ink-800">Pay by bank transfer to this account</Text>
+              <Text className="text-[11px] text-ink-500 mt-0.5">Copy these details into your bank app. Do not use an in-app checkout.</Text>
+            </View>
+            {bankRows.map(([k, v, key], i) => (
               <View key={key} className={`flex-row items-center gap-2 px-3 py-2.5 ${i ? 'border-t border-ink-100' : ''}`}>
                 <View className="flex-1">
                   <Text className="text-[10.5px] text-ink-500">{k}</Text>
@@ -339,35 +468,59 @@ export function PaymentScreen() {
             ))}
           </View>
         )}
-        {configReady && method === 'upi' && escrow && (
-          <View className="rounded-card border border-ink-200 p-4 items-center">
-            <View className="w-44 h-44 rounded-lg items-center justify-center bg-white border border-ink-200">
-              <Icon name="qr-code" size={64} color="#0F172A" />
-            </View>
-            <View className="mt-3 flex-row items-center gap-2 px-3 py-2 rounded-card bg-ink-50 w-full justify-between">
-              <Text className="text-[13px] font-semibold">{escrow.upiId}</Text>
-              <Pressable onPress={() => copy('upi', escrow.upiId)}><Text className="text-[11px] font-semibold text-brand-600">{copied === 'upi' ? '✓ Copied' : 'Copy'}</Text></Pressable>
-            </View>
+        {configReady && method === 'cash' && (
+          <View className="rounded-card border border-ink-200 p-4 mb-4">
+            <Text className="text-[13px] font-semibold text-ink-900">Pay in person at the Builtglory office</Text>
+            <Text className="text-[12px] text-ink-600 mt-1">Hand over cash or a cheque at the office. After you record it here, the team verifies the receipt and only then marks the token as paid.</Text>
           </View>
         )}
-        {configReady && method === 'cheque' && escrow && (
-          <View className="rounded-card border border-ink-200 p-4 gap-2.5">
-            <Text className="text-[13px] font-semibold">Cheque instructions</Text>
-            {escrow.chequeInstructions.map((t, i) => (
-              <View key={i} className="flex-row gap-2">
-                <View className="w-5 h-5 rounded-full bg-brand-50 items-center justify-center"><Text className="text-brand-700 text-[10px] font-bold">{i + 1}</Text></View>
-                <Text className="text-[12px] text-ink-700 flex-1">{t}</Text>
-              </View>
-            ))}
+        {canSubmit && (
+          <View className="gap-3 mb-24">
+            {method === 'bank' && (
+              <Field label="Transaction / UTR reference" required hint="Enter the reference from your bank transfer after you have paid.">
+                <Input
+                  value={transactionReference}
+                  onChangeText={setTransactionReference}
+                  placeholder="e.g. UTR / NEFT / IMPS number"
+                  autoCapitalize="characters"
+                />
+              </Field>
+            )}
+            {method === 'cash' && (
+              <Field label="Receipt or notes" hint="Optional. Mention who received the payment or the receipt number.">
+                <Input
+                  value={notes}
+                  onChangeText={setNotes}
+                  placeholder="Office receipt or staff name"
+                />
+              </Field>
+            )}
+            <Field label="Payment proof" hint={method === 'bank' ? 'Upload a screenshot or photo of the transfer.' : 'Optional photo of the office receipt.'}>
+              <Pressable onPress={pickProof} disabled={status === 'processing'} className="min-h-11 rounded-card border border-ink-200 px-3 py-3 flex-row items-center justify-between">
+                <Text className="text-[13px] text-ink-800 flex-1">{proofName || 'Upload screenshot or receipt photo'}</Text>
+                <Text className="text-[12px] font-semibold text-brand-600">{proofName ? 'Replace' : 'Upload'}</Text>
+              </Pressable>
+            </Field>
           </View>
         )}
-      </View>
-      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={pay} disabled={status === 'processing' || !configReady} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${status === 'processing' || !configReady ? 'bg-ink-100' : 'bg-brand-600'}`}>
-          <Text className={`font-semibold text-[15px] ${status === 'processing' || !configReady ? 'text-ink-400' : 'text-white'}`}>
-            {status === 'processing' ? 'Creating payment...' : method === 'cheque' ? 'I have handed over the cheque' : `I have paid ${formatINR(tokenAmount)}`}
+      </PageBody>
+      <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200 gap-2">
+        <Pressable onPress={pay} disabled={status === 'processing' || !configReady || awaitingConfirmation} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${status === 'processing' || !configReady || awaitingConfirmation ? 'bg-ink-100' : 'bg-brand-600'}`}>
+          <Text className={`font-semibold text-[15px] ${status === 'processing' || !configReady || awaitingConfirmation ? 'text-ink-400' : 'text-white'}`}>
+            {status === 'processing'
+              ? 'Submitting...'
+              : awaitingConfirmation
+                ? 'Waiting for verification'
+                : method === 'cash'
+                  ? `I paid ${formatINR(tokenAmount)} in person`
+                  : `I have paid ${formatINR(tokenAmount)}`}
           </Text>
         </Pressable>
+        {awaitingConfirmation && (
+          <Pressable onPress={cancelPending} disabled={status === 'processing'} className="w-full min-h-11 py-2.5 rounded-xl items-center justify-center border border-ink-200">
+            <Text className="text-ink-700 font-semibold text-[14px]">Cancel pending submission</Text>
+          </Pressable>
+        )}
       </View>
     </Screen>
   );
@@ -387,9 +540,9 @@ export function PaymentFailureScreen() {
         <ShakeView trigger={reason}>
           <SuccessBurst icon="circle-x" color="#E11D48" bgClassName="bg-rose-50" />
         </ShakeView>
-        <Text className="text-[21px] font-bold text-center">Payment failed</Text>
+        <Text className="text-[21px] font-bold text-center">Payment not verified</Text>
         <Text className="text-ink-500 mt-2 text-[13px] max-w-[260px] leading-relaxed text-center">
-          Your token payment could not be confirmed. <Text className="text-ink-700 font-bold">Reason: {reason}</Text> No amount was deducted.
+          Builtglory could not verify this token payment. <Text className="text-ink-700 font-bold">Reason: {reason}</Text> Submit again after you have paid, or contact the team.
         </Text>
         <View className="mt-6 gap-2 w-full">
           <Btn className="w-full" icon="rotate-cw" onPress={() => go('payment', { enquiryId: enquiry?._id ?? enquiry?.id, enquiry, refresh: true })}>Try Again</Btn>
@@ -432,8 +585,8 @@ export function RegistrationDetailsScreen() {
     ? registration.checklist.map(String).filter(Boolean)
     : mapSharedDocuments(enquiry).map((doc) => doc.name);
   const toggle = (d: string) => setChecks((c) => ({ ...c, [d]: !c[d] }));
-  const allChecked = docs.length > 0 && docs.every((d) => checks[d]);
   const { msg, fire } = useToast();
+  const paymentConfirmed = payment?.status === 'paid';
   const appointmentDate = appointment?.date ? new Date(appointment.date).toLocaleDateString() : 'Appointment pending';
   const appointmentTime = appointment?.time || 'Time pending';
   const appointmentLocation = appointment?.officeName || enquiry?.propertySnapshot?.location || 'Registration office pending';
@@ -444,11 +597,14 @@ export function RegistrationDetailsScreen() {
       {loading && <LoadingBlock label="Loading registration context..." />}
       {offline && <OfflineCard onRetry={reload} />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4">
+      <PageBody>
         {!!payment && (
-          <View className="rounded-card bg-emerald-50 border border-emerald-200 p-3 mb-4">
-            <Text className="text-[12px] text-emerald-700">Token payment</Text>
-            <Text className="text-[13px] font-semibold text-emerald-900">{payment.referenceId ?? 'Payment'} · {formatPaymentStatus(payment.status)}</Text>
+          <View className={`rounded-card p-3 mb-4 ${paymentConfirmed ? 'bg-emerald-50 border border-emerald-200' : 'bg-amber-50 border border-amber-200'}`}>
+            <Text className={`text-[12px] ${paymentConfirmed ? 'text-emerald-700' : 'text-amber-800'}`}>Token payment</Text>
+            <Text className={`text-[13px] font-semibold ${paymentConfirmed ? 'text-emerald-900' : 'text-amber-900'}`}>{payment.referenceId ?? 'Payment'} · {formatPaymentStatus(payment.status)}</Text>
+            {!paymentConfirmed && (
+              <Text className="text-[12px] text-amber-800 mt-1">Registration starts after Builtglory confirms your token payment.</Text>
+            )}
           </View>
         )}
         <View className="rounded-card border border-ink-200 overflow-hidden mb-4">
@@ -485,11 +641,11 @@ export function RegistrationDetailsScreen() {
           </View>
         )}
         <Btn variant="outline" className="w-full" icon="calendar-plus" onPress={() => fire(appointment ? 'Use your device calendar to add this appointment.' : 'Appointment is not scheduled yet.')}>Calendar reminder</Btn>
-      </View>
+      </PageBody>
       <Toast message={msg} />
       <View className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={() => resetTo('home')} disabled={!allChecked} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${allChecked ? 'bg-emerald-600' : 'bg-ink-100'}`}>
-          <Text className={`font-semibold text-[15px] ${allChecked ? 'text-white' : 'text-ink-400'}`}>Deal Complete</Text>
+        <Pressable onPress={() => resetTo('home')} disabled={!paymentConfirmed} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${paymentConfirmed ? 'bg-emerald-600' : 'bg-ink-100'}`}>
+          <Text className={`font-semibold text-[15px] ${paymentConfirmed ? 'text-white' : 'text-ink-400'}`}>{paymentConfirmed ? 'Back to Home' : 'Waiting for payment confirmation'}</Text>
         </Pressable>
       </View>
     </Screen>
@@ -563,7 +719,7 @@ export function PropertyWithdrawnScreen() {
       <TopBar onBack={back} title="Enquiry Detail" />
       {loading && <LoadingBlock label="Loading property status..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4">
+      <PageBody>
         <View className="flex-row items-center gap-2.5 p-3.5 rounded-card bg-amber-50 border border-amber-200 mb-4">
           <Icon name="circle-alert" size={18} color="#D97706" />
           <Text className="text-[12.5px] text-amber-800 font-medium flex-1">This property is no longer available.</Text>
@@ -579,7 +735,7 @@ export function PropertyWithdrawnScreen() {
           </View>
         </View>
         <Btn className="w-full" icon="search" onPress={() => go('buyList', { type: property?.type })}>Browse Similar Properties</Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -601,13 +757,13 @@ export function SoldOutScreen() {
           </View>
         </PhotoPlaceholder>
       </View>
-      <View className="px-4 pt-5 items-center">
+      <PageBody className="pt-5 items-center">
         <Text className="text-[20px] font-bold text-ink-900 text-center">This property has been sold</Text>
         <Text className="text-[13px] text-ink-500 mt-2 max-w-[270px] leading-relaxed text-center">
           {title} is no longer on the market. Explore similar listings nearby.
         </Text>
         <Btn className="w-full mt-6" icon="search" onPress={() => go('buyList', { type: property?.type ?? 'commercial' })}>View Similar Properties</Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }

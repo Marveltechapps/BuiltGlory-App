@@ -11,8 +11,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://10.122.252.20:5001",
-        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://10.122.252.20:5001"
+        "EXPO_PUBLIC_API_URL": "http://13.233.199.41:5001",
+        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://13.233.199.41:5001",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyAa8QYUOOYJ8QHNxUe3_R3PwxRBRVE51ZY"
       }
     },
     "preview": {
@@ -21,15 +22,20 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://10.122.252.20:5001",
-        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://10.122.252.20:5001"
+        "EXPO_PUBLIC_API_URL": "http://13.233.199.41:5001",
+        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://13.233.199.41:5001",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyAa8QYUOOYJ8QHNxUe3_R3PwxRBRVE51ZY"
       }
     },
     "production": {
       "autoIncrement": true,
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://10.122.252.20:5001",
-        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://10.122.252.20:5001"
+        "EXPO_PUBLIC_API_URL": "http://13.233.199.41:5001",
+        "EXPO_PUBLIC_PRODUCTION_API_URL": "http://13.233.199.41:5001",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyAa8QYUOOYJ8QHNxUe3_R3PwxRBRVE51ZY"
       }
     }
   },

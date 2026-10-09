@@ -1,6 +1,6 @@
 import React from 'react';
 import { View } from 'react-native';
-import { FadeInView } from '../components/shared';
+import { FadeInView, PageBody } from '../components/shared';
 
 function SkeletonBar({ width, height = 12 }: { width: number | `${number}%`; height?: number }) {
   return <View className="rounded-full bg-ink-100" style={{ width, height }} />;
@@ -33,10 +33,10 @@ function NotificationSkeletonCard({ delay = 0 }: { delay?: number }) {
 
 export function NotificationSkeletonList({ count = 5 }: { count?: number }) {
   return (
-    <View className="px-4 pt-2">
+    <PageBody className="pt-2">
       {Array.from({ length: count }, (_, index) => (
         <NotificationSkeletonCard key={index} delay={index * 60} />
       ))}
-    </View>
+    </PageBody>
   );
 }

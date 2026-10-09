@@ -3,6 +3,8 @@ import {
   Animated,
   Easing,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   View,
   Text,
   Pressable,
@@ -12,12 +14,17 @@ import {
   Modal as RNModal,
   ActivityIndicator,
   Switch,
+  StyleSheet,
+  useWindowDimensions,
   type TextInputProps,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from './Icon';
 import { formatINR, formatPropertyTypeLabel, Property } from '../data/data';
 import { androidInputStyle, lineHeightFor } from '../setup/androidText';
+import { useLayout } from '../layout/breakpoints';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const MOTION = {
@@ -443,7 +450,13 @@ export function Btn({
       style={{ transform: [{ scale }] }}
     >
       {icon && <Icon name={icon} size={18} color={iconColor} />}
-      <Text className={`shrink-0 font-semibold ${textSizes[size]} ${v.text}`} style={{ lineHeight: textLineHeights[size] }}>{children}</Text>
+      <Text
+        className={`min-w-0 shrink font-semibold text-center ${textSizes[size]} ${v.text}`}
+        style={{ lineHeight: textLineHeights[size] }}
+        numberOfLines={2}
+      >
+        {children}
+      </Text>
       {iconRight && <Icon name={iconRight} size={18} color={iconColor} />}
     </AnimatedPressable>
   );
@@ -465,21 +478,33 @@ export function TopBar({
   dark?: boolean;
   large?: boolean;
 }) {
+  const layout = useLayout();
+  const titleSize = large ? (layout.isTablet ? 26 : 22) : layout.isTablet ? 20 : 18;
   return (
-    <View className={`px-4 pt-2 pb-3 flex-row items-center gap-3 ${dark ? '' : ''}`}>
+    <View
+      className={`pt-2 pb-3 flex-row items-center gap-3 ${dark ? '' : ''}`}
+      style={{ paddingHorizontal: layout.gutter, maxWidth: layout.contentMaxWidth ?? undefined, width: '100%', alignSelf: 'center' }}
+    >
       {onBack && (
-        <Pressable onPress={onBack} className="-ml-1 p-2 rounded-full">
+        <Pressable
+          onPress={onBack}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          className="-ml-1 min-w-[44px] min-h-[44px] items-center justify-center rounded-full"
+        >
           <Icon name="arrow-left" size={22} color={dark ? '#fff' : '#0F172A'} />
         </Pressable>
       )}
       <View className="flex-1 min-w-0 shrink">
         <Text
-          className={`${large ? 'text-[22px] font-bold' : 'text-[18px] font-semibold'} tracking-tight ${dark ? 'text-white' : 'text-ink-900'}`}
-          style={{ lineHeight: lineHeightFor(large ? 22 : 18) }}
+          className={`${large ? 'font-bold' : 'font-semibold'} tracking-tight ${dark ? 'text-white' : 'text-ink-900'}`}
+          style={{ fontSize: titleSize, lineHeight: lineHeightFor(titleSize) }}
+          numberOfLines={2}
         >
           {title}
         </Text>
-        {sub && <Text className={`text-xs ${dark ? 'text-white/70' : 'text-ink-500'}`} style={{ lineHeight: lineHeightFor(12) }}>{sub}</Text>}
+        {sub && <Text className={`text-xs ${dark ? 'text-white/70' : 'text-ink-500'}`} style={{ lineHeight: lineHeightFor(12) }} numberOfLines={2}>{sub}</Text>}
       </View>
       {right}
     </View>
@@ -492,11 +517,13 @@ export function Field({
   children,
   hint,
   required,
+  error,
 }: {
   label?: React.ReactNode;
   children: React.ReactNode;
   hint?: string;
   required?: boolean;
+  error?: string;
 }) {
   return (
     <View>
@@ -507,7 +534,11 @@ export function Field({
         </Text>
       )}
       {children}
-      {hint && <Text className="mt-1.5 text-[11px] text-ink-500" style={{ lineHeight: lineHeightFor(11) }}>{hint}</Text>}
+      {error ? (
+        <Text className="mt-1.5 text-[11.5px] text-rose-600" style={{ lineHeight: lineHeightFor(11.5) }}>{error}</Text>
+      ) : hint ? (
+        <Text className="mt-1.5 text-[11px] text-ink-500" style={{ lineHeight: lineHeightFor(11) }}>{hint}</Text>
+      ) : null}
     </View>
   );
 }
@@ -518,12 +549,14 @@ export function Input({
   className = '',
   value,
   onChangeText,
+  onBlur: onBlurProp,
   placeholder,
   keyboardType,
   maxLength,
   secureTextEntry,
   multiline,
   editable = true,
+  invalid,
   autoCapitalize,
   autoComplete,
   textContentType,
@@ -533,12 +566,14 @@ export function Input({
   className?: string;
   value?: string;
   onChangeText?: (v: string) => void;
+  onBlur?: () => void;
   placeholder?: string;
   keyboardType?: TextInputProps['keyboardType'];
   maxLength?: number;
   secureTextEntry?: boolean;
   multiline?: boolean;
   editable?: boolean;
+  invalid?: boolean;
   autoCapitalize?: TextInputProps['autoCapitalize'];
   autoComplete?: TextInputProps['autoComplete'];
   textContentType?: TextInputProps['textContentType'];
@@ -552,13 +587,15 @@ export function Input({
       useNativeDriver: false,
     }).start();
   }, [focus, focused]);
-  const borderColor = focus.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['#E2E8F0', '#1A6FFF'],
-  });
+  const borderColor = invalid
+    ? '#E11D48'
+    : focus.interpolate({
+      inputRange: [0, 1],
+      outputRange: ['#E2E8F0', '#1A6FFF'],
+    });
   return (
     <Animated.View
-      className={`flex-row items-center gap-2 ${multiline ? 'min-h-[90px] items-start py-3' : 'min-h-[48px] py-2.5'} px-3 bg-white border border-ink-200 rounded-card ${className}`}
+      className={`flex-row items-center gap-2 ${multiline ? 'min-h-[90px] items-start py-3' : 'min-h-[48px] py-2.5'} px-3 bg-white border ${invalid ? 'border-rose-500' : 'border-ink-200'} rounded-card ${className}`}
       style={{ borderColor }}
     >
       {icon && <Icon name={icon} size={16} color="#94A3B8" />}
@@ -576,7 +613,10 @@ export function Input({
         autoComplete={autoComplete}
         textContentType={textContentType}
         onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        onBlur={() => {
+          setFocused(false);
+          onBlurProp?.();
+        }}
         placeholderTextColor="#94A3B8"
         className="flex-1 text-[14px] text-ink-900"
         style={{
@@ -610,7 +650,7 @@ export function Chip({
       style={{ transform: [{ scale }] }}
     >
       {icon && <Icon name={icon} size={12} color={active ? '#fff' : '#334155'} />}
-      <Text className={`text-[12px] font-medium ${active ? 'text-white' : 'text-ink-700'}`} style={{ lineHeight: lineHeightFor(12) }}>{children}</Text>
+      <Text className={`text-[12px] font-medium ${active ? 'text-white' : 'text-ink-700'}`} style={{ lineHeight: lineHeightFor(12) }} numberOfLines={2}>{children}</Text>
     </AnimatedPressable>
   );
 }
@@ -635,7 +675,7 @@ export function Badge({ color = 'brand', children, icon }: { color?: string; chi
 }
 
 // ─── Heart / PropertyCard ──────────────────────────────────────
-export function Heart({ active, onPress, size = 16 }: { active?: boolean; onPress?: () => void; size?: number }) {
+export function Heart({ active, onPress, size = 16, compact }: { active?: boolean; onPress?: () => void; size?: number; compact?: boolean }) {
   const pop = useRef(new Animated.Value(1)).current;
   const handlePress = () => {
     Animated.sequence([
@@ -645,7 +685,12 @@ export function Heart({ active, onPress, size = 16 }: { active?: boolean; onPres
     onPress?.();
   };
   return (
-    <AnimatedPressable onPress={handlePress} className={`w-8 h-8 rounded-full items-center justify-center ${active ? 'bg-white' : 'bg-white/90'}`} style={{ transform: [{ scale: pop }] }}>
+    <AnimatedPressable
+      onPress={handlePress}
+      hitSlop={compact ? 10 : 6}
+      className={`${compact ? 'w-8 h-8' : 'min-w-[44px] min-h-[44px]'} rounded-full items-center justify-center ${active ? 'bg-white' : 'bg-white/90'}`}
+      style={{ transform: [{ scale: pop }] }}
+    >
       <Icon name="heart" size={size} color={active ? '#E11D48' : '#0F172A'} fill={active ? '#E11D48' : 'none'} strokeWidth={active ? 2.4 : 2} />
     </AnimatedPressable>
   );
@@ -665,26 +710,29 @@ export function PropertyCard({
   variant?: 'list' | 'compact';
 }) {
   const { scale, pressIn, pressOut } = usePressScale();
+  const layout = useLayout();
+  const thumb = layout.compactThumb;
+  const imageHeight = layout.isTablet ? 220 : layout.isPhoneSm ? 168 : 200;
   if (variant === 'compact') {
     return (
       <AnimatedPressable onPress={onPress} onPressIn={pressIn} onPressOut={pressOut} className="bg-white rounded-card overflow-hidden border border-ink-200" style={{ transform: [{ scale }] }}>
         <View className="flex-row gap-3 p-2">
-          <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} className="rounded-lg" width={92} height={92}>
+          <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} className="rounded-lg" width={thumb} height={thumb}>
             <View className="absolute top-1.5 left-1.5">
               <Badge color="brand">{formatPropertyTypeLabel(p.type)}</Badge>
             </View>
           </PhotoPlaceholder>
-          <View className="flex-1 py-1">
+          <View className="flex-1 min-w-0 py-1">
             <View className="flex-row items-start justify-between gap-2">
-              <Text className="flex-1 text-[14px] font-semibold text-ink-900" numberOfLines={1}>{p.title}</Text>
-              <Heart active={fav} onPress={onFav} />
+              <Text className="flex-1 min-w-0 text-[14px] font-semibold text-ink-900" numberOfLines={2}>{p.title}</Text>
+              <Heart active={fav} onPress={onFav} compact />
             </View>
             <View className="flex-row items-center gap-1 mt-0.5">
               <Icon name="map-pin" size={11} color="#64748B" />
-              <Text className="text-[11px] text-ink-500">{p.location}, {p.city}</Text>
+              <Text className="flex-1 text-[11px] text-ink-500" numberOfLines={1}>{p.location}, {p.city}</Text>
             </View>
             <Text className="text-[15px] font-bold text-brand-600 mt-1">{formatINR(p.price)}</Text>
-            <View className="flex-row gap-3 mt-1">
+            <View className="flex-row flex-wrap gap-3 mt-1">
               {p.bhk > 0 && <Text className="text-[11px] text-ink-500"><Text className="text-ink-700 font-bold">{p.bhk}</Text> BHK</Text>}
               <Text className="text-[11px] text-ink-500"><Text className="text-ink-700 font-bold">{p.area}</Text> sqft</Text>
             </View>
@@ -695,8 +743,8 @@ export function PropertyCard({
   }
   return (
     <AnimatedPressable onPress={onPress} onPressIn={pressIn} onPressOut={pressOut} className="bg-white rounded-card overflow-hidden border border-ink-200" style={{ transform: [{ scale }] }}>
-      <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={200}>
-        <View className="absolute top-3 left-3 flex-row gap-1.5">
+      <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={imageHeight}>
+        <View className="absolute top-3 left-3 flex-row flex-wrap gap-1.5 max-w-[80%]">
           <Badge color="brand">{formatPropertyTypeLabel(p.type)}</Badge>
           {p.verified && <Badge color="green" icon="badge-check">Verified</Badge>}
         </View>
@@ -705,9 +753,9 @@ export function PropertyCard({
         </View>
       </PhotoPlaceholder>
       <View className="p-3">
-        <Text className="text-[15px] font-semibold text-ink-900 leading-display-tight" numberOfLines={1}>{p.title}</Text>
+        <Text className="text-[15px] font-semibold text-ink-900 leading-display-tight" numberOfLines={2}>{p.title}</Text>
         <Text className="mt-2 text-[18px] font-bold text-brand-600">{formatINR(p.price)}</Text>
-        <View className="mt-2 flex-row items-center gap-3">
+        <View className="mt-2 flex-row flex-wrap items-center gap-3">
           {p.bhk > 0 && (
             <View className="flex-row items-center gap-1">
               <Icon name="bed-double" size={12} color="#64748B" />
@@ -721,7 +769,7 @@ export function PropertyCard({
         </View>
         <View className="mt-2 flex-row items-center gap-1">
           <Icon name="map-pin" size={12} color="#1D4ED8" />
-          <Text className="text-[12px] text-brand-700 font-medium" numberOfLines={1}>{p.location}, {p.city}</Text>
+          <Text className="flex-1 text-[12px] text-brand-700 font-medium" numberOfLines={1}>{p.location}, {p.city}</Text>
         </View>
       </View>
     </AnimatedPressable>
@@ -733,7 +781,7 @@ export const BOTTOM_NAV_HEIGHT = 82;
 
 const BOTTOM_NAV_ITEMS = [
   { id: 'home', label: 'Home', icon: 'home' },
-  { id: 'buy', label: 'Explore', icon: 'search' },
+  { id: 'buy', label: 'Buy', icon: 'search' },
   { id: 'sell', label: 'Sell', icon: 'tag' },
   { id: 'profile', label: 'Profile', icon: 'user' },
 ];
@@ -885,6 +933,25 @@ export function BottomNav({ active, onNav, profilePhoto }: { active: string; onN
 }
 
 // ─── Screen ────────────────────────────────────────────────────
+export function PageBody({
+  children,
+  className = '',
+  style,
+  onLayout,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  style?: StyleProp<ViewStyle>;
+  onLayout?: (event: any) => void;
+}) {
+  const layout = useLayout();
+  return (
+    <View className={className} onLayout={onLayout} style={[{ paddingHorizontal: layout.gutter, width: '100%' }, style]}>
+      {children}
+    </View>
+  );
+}
+
 export function Screen({
   children,
   dark,
@@ -893,6 +960,7 @@ export function Screen({
   refreshing,
   onRefresh,
   fixedTop,
+  scrollRef,
 }: {
   children: React.ReactNode;
   dark?: boolean;
@@ -901,8 +969,10 @@ export function Screen({
   refreshing?: boolean;
   onRefresh?: () => void;
   fixedTop?: React.ReactNode;
+  scrollRef?: React.RefObject<ScrollView | null>;
 }) {
   const insets = useSafeAreaInsets();
+  const layout = useLayout();
   const childrenArray = React.Children.toArray(children);
   const isBottomNav = (child: React.ReactNode) => React.isValidElement(child) && child.type === BottomNav;
   const isTopBar = (child: React.ReactNode) => React.isValidElement(child) && child.type === TopBar;
@@ -916,36 +986,52 @@ export function Screen({
   const contentChildren = childrenArray.filter((child) => !isBottomNav(child) && !isTopBar(child) && !isFixedBottomAction(child));
   const fixedChildren = childrenArray.filter(isBottomNav);
   const navPadding = padBottom ? BOTTOM_NAV_HEIGHT + 20 + insets.bottom : 0;
-  const actionPadding = fixedBottomActionChildren.length ? 96 + insets.bottom : 0;
-  const bottomPadding = Math.max(24, navPadding, actionPadding);
+  // Landscape CTAs can wrap; give a bit more room on short heights.
+  const actionPadBase = layout.isLandscape ? 112 : 96;
+  const actionPadding = fixedBottomActionChildren.length ? actionPadBase + insets.bottom : 0;
+  const bottomPadding = Math.max(24 + insets.bottom * (padBottom || fixedBottomActionChildren.length ? 0 : 0.25), navPadding, actionPadding);
 
   const contentEntry = useEntryAnimation(0, 6);
+  const constrainStyle = layout.contentMaxWidth
+    ? { maxWidth: layout.contentMaxWidth, width: '100%' as const, alignSelf: 'center' as const }
+    : undefined;
+
   return (
     <SafeAreaView edges={['top']} className={`flex-1 ${dark ? 'bg-ink-900' : 'bg-white'}`}>
       {fixedTop}
       {topBarChildren}
-      {fill ? (
-        <Animated.View className="flex-1" style={[contentEntry, { paddingBottom: padBottom || fixedBottomActionChildren.length ? bottomPadding : 0 }]}>
-          {contentChildren}
-        </Animated.View>
-      ) : (
-        <ScrollView
-          className="flex-1"
-          contentContainerStyle={{ paddingBottom: bottomPadding }}
-          showsVerticalScrollIndicator={false}
-          refreshControl={onRefresh ? (
-            <RefreshControl
-              refreshing={!!refreshing}
-              onRefresh={onRefresh}
-              tintColor="#1A6FFF"
-              colors={['#1A6FFF']}
-              progressBackgroundColor="#EFF6FF"
-            />
-          ) : undefined}
-        >
-          <Animated.View style={contentEntry}>{contentChildren}</Animated.View>
-        </ScrollView>
-      )}
+      <KeyboardAvoidingView
+        className="flex-1"
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        enabled={!fill}
+        style={{ flex: 1 }}
+      >
+        {fill ? (
+          <Animated.View className="flex-1" style={[contentEntry, constrainStyle, { paddingBottom: padBottom || fixedBottomActionChildren.length ? bottomPadding : 0 }]}>
+            {contentChildren}
+          </Animated.View>
+        ) : (
+          <ScrollView
+            ref={scrollRef}
+            className="flex-1"
+            contentContainerStyle={[{ paddingBottom: bottomPadding, flexGrow: 1 }, constrainStyle]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            refreshControl={onRefresh ? (
+              <RefreshControl
+                refreshing={!!refreshing}
+                onRefresh={onRefresh}
+                tintColor="#1A6FFF"
+                colors={['#1A6FFF']}
+                progressBackgroundColor="#EFF6FF"
+              />
+            ) : undefined}
+          >
+            <Animated.View style={contentEntry}>{contentChildren}</Animated.View>
+          </ScrollView>
+        )}
+      </KeyboardAvoidingView>
       {fixedBottomActionChildren}
       {fixedChildren}
     </SafeAreaView>
@@ -1005,7 +1091,11 @@ export function Sheet({
   onClose: () => void;
   title?: string;
 }) {
-  const slideY = useRef(new Animated.Value(360)).current;
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const layout = useLayout();
+  const maxHeight = Math.min(layout.sheetMaxHeight, windowHeight - insets.top - 12);
+  const slideY = useRef(new Animated.Value(Math.min(420, maxHeight))).current;
   const fade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -1024,17 +1114,26 @@ export function Sheet({
     ]).start();
   }, [fade, slideY]);
 
+  const sheetMaxWidth = layout.isTablet ? Math.min(560, layout.contentWidth) : undefined;
+
   return (
     <RNModal visible transparent animationType="none" onRequestClose={onClose}>
       <Animated.View className="flex-1 justify-end bg-black/45" style={{ opacity: fade }}>
-        <Pressable className="absolute inset-0" onPress={onClose} />
+        <Pressable className="absolute inset-0" onPress={onClose} accessibilityLabel="Close sheet" />
         <Animated.View
-          className="w-full bg-white rounded-t-3xl p-5 pb-7 shadow-lg"
-          style={{ transform: [{ translateY: slideY }] }}
+          className="w-full bg-white rounded-t-3xl shadow-lg self-center overflow-hidden"
+          style={{
+            transform: [{ translateY: slideY }],
+            maxHeight,
+            maxWidth: sheetMaxWidth,
+            paddingTop: 20,
+            paddingHorizontal: layout.gutter,
+            paddingBottom: Math.max(20, insets.bottom + 12),
+          }}
         >
           <View className="w-10 h-1 bg-ink-200 rounded-full self-center mb-4" />
           {title && <Text className="text-[17px] font-bold text-ink-900 mb-3">{title}</Text>}
-          {children}
+          <View style={{ maxHeight: maxHeight - 72 }}>{children}</View>
         </Animated.View>
       </Animated.View>
     </RNModal>
@@ -1052,6 +1151,10 @@ export function Modal({
   children: React.ReactNode;
   title?: string;
 }) {
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const layout = useLayout();
+  const maxHeight = Math.min(layout.sheetMaxHeight, windowHeight - insets.top - 12);
   const slideY = useRef(new Animated.Value(36)).current;
   const fade = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -1062,14 +1165,25 @@ export function Modal({
     ]).start();
   }, [fade, open, slideY]);
   if (!open) return null;
+  const sheetMaxWidth = layout.isTablet ? Math.min(560, layout.contentWidth) : undefined;
   return (
     <RNModal visible transparent animationType="fade" onRequestClose={onClose}>
       <Animated.View className="flex-1 justify-end bg-black/40" style={{ opacity: fade }}>
-        <Pressable className="absolute inset-0" onPress={onClose} />
-        <Animated.View className="bg-white w-full rounded-t-3xl p-5 pb-8" style={{ transform: [{ translateY: slideY }] }}>
+        <Pressable className="absolute inset-0" onPress={onClose} accessibilityLabel="Close dialog" />
+        <Animated.View
+          className="bg-white w-full rounded-t-3xl self-center overflow-hidden"
+          style={{
+            transform: [{ translateY: slideY }],
+            maxHeight,
+            maxWidth: sheetMaxWidth,
+            paddingTop: 20,
+            paddingHorizontal: layout.gutter,
+            paddingBottom: Math.max(24, insets.bottom + 12),
+          }}
+        >
           <View className="w-10 h-1 bg-ink-200 rounded-full self-center mb-3" />
           {title && <Text className="text-lg font-semibold mb-3">{title}</Text>}
-          {children}
+          <View style={{ maxHeight: maxHeight - 72 }}>{children}</View>
         </Animated.View>
       </Animated.View>
     </RNModal>

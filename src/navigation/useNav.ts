@@ -1,62 +1,17 @@
 import { useCallback } from 'react';
 import { BackHandler } from 'react-native';
 import { CommonActions, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
-
-const TAB_TARGETS: Record<string, { tab: string; screen: string }> = {
-  home: { tab: 'HomeTab', screen: 'home' },
-  buyTypes: { tab: 'BuyTab', screen: 'buyTypes' },
-  sellTypes: { tab: 'SellTab', screen: 'sellTypes' },
-  profile: { tab: 'ProfileTab', screen: 'profile' },
-};
-
-const TAB_STACK_ROOTS: Record<string, string> = {
-  HomeTab: 'home',
-  BuyTab: 'buyTypes',
-  SellTab: 'sellTypes',
-  ProfileTab: 'profile',
-};
-
-const MAIN_TAB_NAMES = Object.keys(TAB_STACK_ROOTS);
-
-function buildMainTabsResetState(activeTab: string, activeScreen: string, nextCtx: any = {}) {
-  return {
-    index: Math.max(0, MAIN_TAB_NAMES.indexOf(activeTab)),
-    routes: MAIN_TAB_NAMES.map((tab) => ({
-      name: tab,
-      state: {
-        index: 0,
-        routes: [{
-          name: tab === activeTab ? activeScreen : TAB_STACK_ROOTS[tab],
-          ...(tab === activeTab ? { params: { ctx: nextCtx } } : {}),
-        }],
-      },
-    })),
-  };
-}
-
-const TAB_BY_ID: Record<string, { tab: string; screen: string }> = {
-  home: TAB_TARGETS.home,
-  buy: TAB_TARGETS.buyTypes,
-  sell: TAB_TARGETS.sellTypes,
-  profile: TAB_TARGETS.profile,
-};
-
-const ROOT_SCREEN_NAMES = new Set([
-  'splash',
-  'onboarding',
-  'login',
-  'otp',
-  'profileSetup',
-  'locationType',
-  'terms',
-  'permissions',
-  'termsOfUse',
-  'privacyPolicy',
-  'offline',
-  'forceUpdate',
-  'maintenance',
-  'sessionExpiry',
-]);
+import {
+  MAIN_TAB_NAMES,
+  ROOT_SCREEN_NAMES,
+  TAB_BY_ID,
+  TAB_STACK_ROOTS,
+  TAB_TARGETS,
+  buildTabFlowResetState,
+  buildTabRootResetState,
+  isRootScreen,
+  isTabRootScreen,
+} from './routes';
 
 function rootNavigation(navigation: any) {
   let next = navigation;
@@ -68,12 +23,26 @@ function isTabNavigator(navigation: any) {
   return Boolean(navigation?.getState?.().routeNames?.some((name: string) => name.endsWith('Tab')));
 }
 
+let lastNavKey = '';
+let lastNavAt = 0;
+
+function isDuplicateNavigation(screen: string, nextCtx: any) {
+  const key = `${screen}:${JSON.stringify(nextCtx ?? {})}`;
+  const now = Date.now();
+  if (key === lastNavKey && now - lastNavAt < 450) return true;
+  lastNavKey = key;
+  lastNavAt = now;
+  return false;
+}
+
 export function useNav<T = any>() {
   const navigation: any = useNavigation();
   const route = useRoute<any>();
   const ctx: T = route.params?.ctx || {};
 
   const go = (screen: string, nextCtx: any = {}) => {
+    if (isDuplicateNavigation(screen, nextCtx)) return;
+
     if (TAB_TARGETS[screen]) {
       const target = TAB_TARGETS[screen];
       rootNavigation(navigation).navigate('MainTabs', {
@@ -82,27 +51,40 @@ export function useNav<T = any>() {
       });
       return;
     }
-    if (ROOT_SCREEN_NAMES.has(screen)) {
+    if (isRootScreen(screen)) {
       rootNavigation(navigation).navigate(screen, { ctx: nextCtx });
+      return;
+    }
+    if (route.name === screen && typeof navigation.push === 'function') {
+      navigation.push(screen, { ctx: nextCtx });
       return;
     }
     navigation.navigate(screen, { ctx: nextCtx });
   };
+
   const back = () => {
-    if (navigation.canGoBack()) navigation.goBack();
-    else go('home');
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    if (ROOT_SCREEN_NAMES.has(route.name) || isTabRootScreen(route.name)) {
+      return;
+    }
+    go('home');
   };
+
   const jump = (screen: string) => {
     if (TAB_TARGETS[screen]) {
       go(screen);
       return;
     }
-    if (ROOT_SCREEN_NAMES.has(screen)) {
+    if (isRootScreen(screen)) {
       rootNavigation(navigation).navigate(screen, { ctx: {} });
       return;
     }
     navigation.navigate(screen, { ctx: {} });
   };
+
   const resetTo = (screen: string, nextCtx: any = {}) => {
     const root = rootNavigation(navigation);
     if (TAB_TARGETS[screen]) {
@@ -111,7 +93,7 @@ export function useNav<T = any>() {
         index: 0,
         routes: [{
           name: 'MainTabs',
-          state: buildMainTabsResetState(target.tab, target.screen, nextCtx),
+          state: buildTabRootResetState(target.tab, target.screen, nextCtx),
         }],
       }));
       return;
@@ -121,28 +103,54 @@ export function useNav<T = any>() {
       routes: [{ name: screen, params: { ctx: nextCtx } }],
     }));
   };
+
   const completeTo = (screen: string, nextCtx: any = {}) => {
     navigation.dispatch(CommonActions.reset({
       index: 0,
       routes: [{ name: screen, params: { ctx: nextCtx } }],
     }));
   };
+
+  const openFromTabRoot = (screen: string, nextCtx: any = {}) => {
+    if (TAB_TARGETS[screen]) {
+      resetTo(screen, nextCtx);
+      return;
+    }
+    rootNavigation(navigation).dispatch(CommonActions.reset({
+      index: 0,
+      routes: [{
+        name: 'MainTabs',
+        state: buildTabFlowResetState(screen, nextCtx),
+      }],
+    }));
+  };
+
   const switchTab = (tab: string) => {
     const target = TAB_BY_ID[tab];
     if (!target) return;
-    // Always open the tab root so Profile never resurfaces a nested screen
-    // such as Listing Status (listingDetail) left on ProfileTab's stack.
     if (route.name === target.screen && isTabNavigator(navigation.getParent?.())) return;
     rootNavigation(navigation).navigate('MainTabs', {
       screen: target.tab,
       params: { screen: target.screen, params: { ctx: {} } },
     });
   };
+
   const onNav = (tab: string) => {
     switchTab(tab);
   };
 
-  return { go, back, jump, resetTo, completeTo, onNav, ctx, navigation };
+  return {
+    go,
+    back,
+    jump,
+    resetTo,
+    completeTo,
+    openFromTabRoot,
+    onNav,
+    ctx,
+    navigation,
+    canGoBack: navigation.canGoBack(),
+  };
 }
 
 export function useFlowCompletionBack(options?: { redirectToHome?: boolean }) {
@@ -161,3 +169,17 @@ export function useFlowCompletionBack(options?: { redirectToHome?: boolean }) {
     }, [navigation, redirectToHome, resetTo]),
   );
 }
+
+export function useBlockHardwareBack() {
+  const navigation: any = useNavigation();
+
+  useFocusEffect(
+    useCallback(() => {
+      navigation.setOptions({ gestureEnabled: false });
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+      return () => sub.remove();
+    }, [navigation]),
+  );
+}
+
+export { MAIN_TAB_NAMES, TAB_STACK_ROOTS };

@@ -4,14 +4,16 @@ import Constants from 'expo-constants';
 import * as StoreReview from 'expo-store-review';
 import Icon from '../components/Icon';
 import { BrandLogo } from '../components/BrandLogo';
-import { Btn, FadeInView, Field, Input, Screen, TopBar } from '../components/shared';
+import { Btn, FadeInView, Field, Input, Screen, TopBar, PageBody } from '../components/shared';
 import { useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
 import { createAppFeedback, getPublicAppConfig } from '../api/customer';
 import { contentBody, contentMetaArray, contentMetaString, fallbackAboutContent, useContentItem } from '../content';
 import {
+  COMPANY_SUPPORT_EMAIL,
   COMPANY_SUPPORT_PHONE_DISPLAY,
   openCompanyCall,
+  openCompanySupportEmail,
   openCompanyWhatsApp,
 } from '../config/companyContact';
 
@@ -151,7 +153,7 @@ export function RateAppScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Rate the App" sub="Share your experience" />
-      <View className="px-4 pb-8 gap-6">
+      <PageBody className="pb-8 gap-6">
         <FadeInView className="items-center pt-2">
           <BrandLogo size={80} />
           <Text className="text-[20px] font-bold text-ink-900 mt-4">Enjoying BuiltGlory?</Text>
@@ -190,7 +192,7 @@ export function RateAppScreen() {
             Maybe Later
           </Btn>
         </FadeInView>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -207,7 +209,7 @@ export function AboutUsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="About Us" sub="Learn about Builtglory" />
-      <View className="px-4 pb-6">
+      <PageBody className="pb-6">
         {loading && <Text className="mb-3 text-[12px] text-ink-500">Loading company content...</Text>}
         {!!error && (
           <Pressable onPress={reload} className="mb-3 p-3 rounded-card border border-amber-200 bg-amber-50">
@@ -244,7 +246,7 @@ export function AboutUsScreen() {
             <Text className="text-[13px] font-bold text-ink-900 mb-2">Contact Information</Text>
             <View className="gap-2">
               <View className="flex-row items-start gap-2"><Icon name="map-pin" size={14} color="#1A6FFF" /><Text className="text-[12px] text-ink-700 flex-1">{contentMetaString(about, 'address', '123 Tech Park, OMR, Adyar, Chennai 600020, India')}</Text></View>
-              <Pressable onPress={() => Linking.openURL(`mailto:${contentMetaString(about, 'supportEmail', 'support@builtglory.com')}`)} className="flex-row items-start gap-2"><Icon name="mail" size={14} color="#1A6FFF" /><Text className="text-[12px] text-brand-600 font-medium">{contentMetaString(about, 'supportEmail', 'support@builtglory.com')}</Text></Pressable>
+              <Pressable onPress={() => void openCompanySupportEmail()} className="flex-row items-start gap-2"><Icon name="mail" size={14} color="#1A6FFF" /><Text className="text-[12px] text-brand-600 font-medium">{contentMetaString(about, 'supportEmail', COMPANY_SUPPORT_EMAIL)}</Text></Pressable>
               <Pressable onPress={() => void openCompanyCall()} className="flex-row items-start gap-2"><Icon name="phone" size={14} color="#1A6FFF" /><Text className="text-[12px] text-brand-600 font-medium">{contentMetaString(about, 'supportPhone', COMPANY_SUPPORT_PHONE_DISPLAY)}</Text></Pressable>
               <Pressable onPress={() => void openCompanyWhatsApp()} className="flex-row items-start gap-2"><Icon name="message-circle" size={14} color="#059669" /><Text className="text-[12px] text-emerald-700 font-medium">WhatsApp: {COMPANY_SUPPORT_PHONE_DISPLAY}</Text></Pressable>
             </View>
@@ -267,7 +269,7 @@ export function AboutUsScreen() {
         <View className="mt-6 p-4 rounded-card bg-ink-50 items-center">
           <Text className="text-[11px] text-ink-700 font-medium">{contentMetaString(about, 'tagline', 'Simplifying real estate, one transaction at a time')}</Text>
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }

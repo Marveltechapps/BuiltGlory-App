@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Linking, View, Text, Pressable, ScrollView } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Icon from '../components/Icon';
-import { Screen, TopBar, Badge, Chip, PhotoPlaceholder, Btn, Timeline } from '../components/shared';
+import { Screen, TopBar, Badge, Chip, PhotoPlaceholder, Btn, Timeline, PageBody } from '../components/shared';
 import { formatINR } from '../data/data';
 import { useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
@@ -343,7 +343,7 @@ export function ListingDetailScreen() {
   return (
     <Screen refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load(true); }}>
       <TopBar onBack={back} title="Listing Status" sub="Live pipeline" right={<Pressable onPress={() => go('editListing', { sellRequestId, sellRequest: request, refresh: true })}><Text className="text-brand-600 text-[13px] font-semibold">Edit</Text></Pressable>} />
-      <View className="px-4 pb-6">
+      <PageBody className="pb-6">
         {loading && <LoadingBlock label="Loading listing status..." />}
         {offline && <OfflineCard onRetry={() => load(false)} />}
         {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={() => load(false)} /></View>}
@@ -377,7 +377,7 @@ export function ListingDetailScreen() {
           </View>
         )}
         <Timeline steps={steps as any} />
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -424,7 +424,7 @@ export function MyVisitsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="My Visits" sub={`${visits.length} total`} />
-      <View className="px-4">
+      <PageBody>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }} className="mb-3">
           {['all', 'upcoming', 'completed'].map((t) => (
             <Chip key={t} active={tab === t} onPress={() => setTab(t)}>{t === 'all' ? 'All' : t[0].toUpperCase() + t.slice(1)}</Chip>
@@ -449,7 +449,7 @@ export function MyVisitsScreen() {
             ))}
           </View>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -516,7 +516,7 @@ export function MyDealsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="My Deals" sub={`${deals.length} total`} />
-      <View className="px-4">
+      <PageBody>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }} className="mb-3">
           {['all', 'active', 'completed'].map((t) => (
             <Chip key={t} active={tab === t} onPress={() => setTab(t)}>{t === 'all' ? 'All' : t[0].toUpperCase() + t.slice(1)}</Chip>
@@ -536,11 +536,14 @@ export function MyDealsScreen() {
                 <View className="flex-row items-center justify-between mb-1"><Text className="text-[11px] text-ink-500">Progress</Text><Text className="text-[11px] font-semibold text-ink-700">{d.progress}%</Text></View>
                 <View className="w-full h-2 bg-ink-100 rounded-full overflow-hidden"><View className="h-full bg-brand-600 rounded-full" style={{ width: `${d.progress}%` }} /></View>
               </View>
-              <Pressable onPress={() => d.enquiry ? go('enquiryDetail', { enquiryId: enquiryId(d.enquiry), enquiry: d.enquiry }) : go('paymentSchedule')} className="w-full min-h-9 py-2 rounded-card bg-brand-50 items-center justify-center"><Text className="text-brand-600 text-[12px] font-semibold">View Details →</Text></Pressable>
+              <Pressable onPress={() => d.enquiry
+                ? go('enquiryDetail', { enquiryId: enquiryId(d.enquiry), enquiry: d.enquiry })
+                : go('payment', { payment: d.payment, propertyId: d.payment?.propertyId, dealId: d.payment?.dealId, refresh: true })
+              } className="w-full min-h-9 py-2 rounded-card bg-brand-50 items-center justify-center"><Text className="text-brand-600 text-[12px] font-semibold">View Details →</Text></Pressable>
             </View>
           ))}
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -560,7 +563,9 @@ export function NoListingsScreen() {
         <View className="w-28 h-28 rounded-3xl bg-brand-50 items-center justify-center mb-5"><Icon name="tag" size={48} color="#1A6FFF" strokeWidth={1.5} /></View>
         <Text className="text-[18px] font-bold text-ink-900 text-center">You haven't listed any properties yet.</Text>
         <Text className="text-[13px] text-ink-500 mt-2 max-w-[250px] leading-relaxed text-center">{count && count > 0 ? 'You already have listings. Open My Listings to manage them.' : 'List your property and start receiving verified buyer enquiries.'}</Text>
-        <Btn className="mt-6" icon="plus" onPress={() => go('sellTypes')}>List a Property</Btn>
+        <Btn className="mt-6" icon={count && count > 0 ? 'tag' : 'plus'} onPress={() => go(count && count > 0 ? 'myListings' : 'sellTypes')}>
+          {count && count > 0 ? 'Open My Listings' : 'List a Property'}
+        </Btn>
       </View>
     </Screen>
   );
@@ -581,9 +586,11 @@ export function EnquiryDetailScreen() {
     refresh,
   } = useBuyEnquiryResource(ctx);
   const [canceling, setCanceling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const cancel = async () => {
     if (!authToken || !activeEnquiryId) return;
     setCanceling(true);
+    setCancelError(null);
     try {
       const updated = await cancelBuyEnquiry(authToken, activeEnquiryId, 'Cancelled from customer profile.');
       const cacheKey = `${BUY_ENQUIRIES_CACHE_PREFIX}:${authToken}`;
@@ -594,14 +601,24 @@ export function EnquiryDetailScreen() {
       }
       await reload();
     } catch (err) {
-      // Error state handled by reload.
+      setCancelError(resourceErrorMessage(err, 'Could not cancel this enquiry. Please try again.'));
     } finally {
       setCanceling(false);
     }
   };
   const property = enquiryProperty(enquiry);
   const status = String(enquiry?.status || 'awaiting');
-  const isCancelled = status.includes('cancel');
+  const dealStage = String(dealOf(enquiry)?.stage || '');
+  const isClosed = status === 'closed' || dealStage === 'closed';
+  const hasActiveDeal = Boolean(dealStage && dealStage !== 'lost' && dealStage !== 'closed');
+  const cancelDisabled = canceling || isClosed || hasActiveDeal;
+  const cancelLabel = isClosed
+    ? 'Enquiry Cancelled'
+    : hasActiveDeal
+      ? 'Cancel Unavailable'
+      : canceling
+        ? 'Cancelling...'
+        : 'Cancel Enquiry';
   const submittedLabel = enquiry?.submittedAt ? new Date(enquiry.submittedAt).toLocaleDateString() : 'Pending';
   const visitCount = enquiry?.visits?.length || 0;
   const displayStatus = getEnquiryDisplayStatus(enquiry);
@@ -610,10 +627,11 @@ export function EnquiryDetailScreen() {
     <Screen fill refreshing={refreshing} onRefresh={refresh}>
       <TopBar onBack={back} title="Enquiry Status" sub="Live pipeline" />
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
-        <View className="px-4">
+        <PageBody>
           {loading && <LoadingBlock label="Loading enquiry details..." />}
           {offline && <OfflineCard onRetry={reload} />}
           {!!error && <View className="mb-3"><ErrorCard message={error} onRetry={reload} /></View>}
+          {!!cancelError && <View className="mb-3"><ErrorCard message={cancelError} /></View>}
           {!loading && !error && !enquiry && (
             <EmptyStateCard title="Enquiry unavailable" body="This enquiry could not be loaded from Builtglory. Pull to refresh and try again." icon="inbox" />
           )}
@@ -647,11 +665,11 @@ export function EnquiryDetailScreen() {
             </View>
           </View>
           <Timeline steps={steps as any} />
-        </View>
+        </PageBody>
       </ScrollView>
       <View className="p-4 bg-white border-t border-ink-200">
-        <Pressable onPress={cancel} disabled={canceling || isCancelled} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${canceling || isCancelled ? 'bg-ink-50' : 'bg-rose-50'}`}>
-          <Text className={`font-medium text-[14px] ${canceling || isCancelled ? 'text-ink-400' : 'text-rose-600'}`}>{isCancelled ? 'Enquiry Cancelled' : canceling ? 'Cancelling...' : 'Cancel Enquiry'}</Text>
+        <Pressable onPress={cancel} disabled={cancelDisabled} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center ${cancelDisabled ? 'bg-ink-50' : 'bg-rose-50'}`}>
+          <Text className={`font-medium text-[14px] ${cancelDisabled ? 'text-ink-400' : 'text-rose-600'}`}>{cancelLabel}</Text>
         </Pressable>
       </View>
     </Screen>
@@ -673,7 +691,9 @@ export function NoEnquiriesScreen() {
         <View className="w-28 h-28 rounded-3xl bg-brand-50 items-center justify-center mb-5"><Icon name="inbox" size={48} color="#1A6FFF" strokeWidth={1.5} /></View>
         <Text className="text-[18px] font-bold text-ink-900 text-center">You haven't submitted any enquiries yet.</Text>
         <Text className="text-[13px] text-ink-500 mt-2 max-w-[250px] leading-relaxed text-center">{count && count > 0 ? 'You already have enquiries. Open My Enquiries to view them.' : 'Browse verified properties and submit an enquiry to get started.'}</Text>
-        <Btn className="mt-6" icon="search" onPress={() => go('home')}>Browse Properties</Btn>
+        <Btn className="mt-6" icon="search" onPress={() => go(count && count > 0 ? 'myEnquiries' : 'home')}>
+          {count && count > 0 ? 'Open My Enquiries' : 'Browse Properties'}
+        </Btn>
       </View>
     </Screen>
   );

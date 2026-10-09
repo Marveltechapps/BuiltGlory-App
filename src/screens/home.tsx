@@ -9,31 +9,38 @@ import { BrandLogo } from '../components/BrandLogo';
 import {
   Screen, TopBar, Input, Chip, Badge, Heart, PropertyCard, PhotoPlaceholder,
   Sheet, Toast, useToast, Btn, Toggle, Field, Spinner, SkeletonCard, EmptyState,
-  AnimatedNumber, FadeInView, PressableScale,
+  AnimatedNumber, FadeInView, PressableScale, PageBody,
 } from '../components/shared';
 import { PROPERTY_TYPES, formatINR, formatPropertyTypeLabel } from '../data/data';
 import { useAppState } from '../state/AppState';
 import { useNav } from '../navigation/useNav';
 import { useFocusEffect } from '@react-navigation/native';
-import { ChatSocket, createChatSocket } from '../realtime/chatSocket';
-import { contentMetaArray, fallbackFaqContent, useContentItem, useContentSection } from '../content';
-import { openCompanyCall, openCompanyWhatsApp } from '../config/companyContact';
+import { gridItemWidth, useBrowseTypeGridLayout, useLayout } from '../layout/breakpoints';
 import {
   addSupportTicketResponse,
   CreateSupportTicketInput,
   createCallbackRequest,
   createAppFeedback,
   createSupportTicket,
+  closeSupportTicket,
+  CustomerApiError,
   CustomerProfile,
   clearRecentSearches,
+  getActiveLiveChat,
   getSupportTicket,
   listRecentSearches,
   listCustomerProperties,
   listSupportTickets,
   listTrendingSearches,
+  markSupportTicketRead,
   recordRecentSearch,
+  reopenSupportTicket,
+  startLiveChat,
   SupportTicket,
 } from '../api/customer';
+import { ChatConnectionState, ChatSocket, createChatSocket } from '../realtime/chatSocket';
+import { contentMetaArray, fallbackFaqContent, useContentItem, useContentSection } from '../content';
+import { COMPANY_SUPPORT_EMAIL, openCompanyCall, openCompanySupportEmail, openCompanyWhatsApp } from '../config/companyContact';
 import {
   FEATURED_LIST_CACHE_KEY,
   HOME_FEED_CACHE_KEY,
@@ -131,6 +138,7 @@ function CompactLoadingBlock({ label }: { label: string }) {
 // ─── H-01 Home ───────────────────────────────────────────────
 export function HomeScreen() {
   const { go } = useNav();
+  const layout = useLayout();
   const { authToken, currentUser, fav, getCachedValue, setCachedValue, clearCachedValue, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
   const [unread, setUnread] = useState(0);
   const [coach, setCoach] = useState(false);
@@ -320,15 +328,19 @@ export function HomeScreen() {
         refreshing={refreshingFeed}
         onRefresh={() => loadHomeFeed(true)}
         fixedTop={
-          <View className="px-4 pt-2 pb-5 flex-row items-center justify-between bg-white">
-            <BrandLogo size={36} />
+          <View
+            className="pt-2 pb-3 flex-row items-center justify-between bg-white"
+            style={{ paddingHorizontal: layout.gutter, maxWidth: layout.contentMaxWidth ?? undefined, width: '100%', alignSelf: 'center' }}
+          >
+            <BrandLogo size={layout.isTablet ? 42 : layout.isPhoneSm ? 32 : 36} />
             <View className="flex-row items-center gap-1">
-              <PressableScale onPress={() => go('help')} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center">
+              <PressableScale onPress={() => go('help')} hitSlop={8} className="w-11 h-11 rounded-full bg-ink-100 items-center justify-center">
                 <Icon name="help-circle" size={17} color="#64748B" />
               </PressableScale>
               <PressableScale
                 onPress={() => go('notifications')}
-                className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center relative"
+                hitSlop={8}
+                className="w-11 h-11 rounded-full bg-ink-100 items-center justify-center relative"
               >
                 <Icon name="bell" size={17} color="#64748B" />
                 {unread > 0 && (
@@ -341,15 +353,15 @@ export function HomeScreen() {
           </View>
         }
       >
-        <View className="px-4">
+        <View style={{ paddingHorizontal: layout.gutter }}>
           <PressableScale
             ref={searchRef}
             onLayout={() => measureTarget('search', searchRef)}
             onPress={() => go('search')}
-            className="flex-row items-center gap-2 px-3.5 py-3 bg-ink-100 rounded-xl"
+            className="flex-row items-center gap-2 px-3.5 py-3.5 bg-ink-100 rounded-xl min-h-[48px]"
           >
             <Icon name="search" size={16} color="#64748B" />
-            <Text className="flex-1 text-[14px] text-ink-500">Search by location or property type</Text>
+            <Text className="flex-1 min-w-0 text-[14px] text-ink-500" numberOfLines={1}>Search by location or property type</Text>
           </PressableScale>
         </View>
 
@@ -357,8 +369,9 @@ export function HomeScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          className="mt-4 pl-4"
-          contentContainerStyle={{ gap: 12, paddingRight: 16 }}
+          className="mt-4"
+          style={{ paddingLeft: layout.gutter }}
+          contentContainerStyle={{ gap: layout.gap, paddingRight: layout.gutter }}
         >
           {homeBanners.map((banner) => {
             const showImage = banner.useImage && !!banner.imageUrl;
@@ -371,7 +384,7 @@ export function HomeScreen() {
               <PressableScale
                 key={banner.id}
                 onPress={() => openHomeBanner(banner)}
-                style={{ width: 280, backgroundColor: showImage ? '#0F172A' : banner.bgColor || '#EFF6FF' }}
+                style={{ width: layout.bannerCardWidth, backgroundColor: showImage ? '#0F172A' : banner.bgColor || '#EFF6FF' }}
                 className="relative overflow-hidden rounded-2xl p-4 min-h-[116px] justify-between"
               >
                 {showImage && (
@@ -380,7 +393,7 @@ export function HomeScreen() {
                     <View className="absolute inset-0 bg-black/35" />
                   </>
                 )}
-                <View className="relative">
+                <View className="relative min-w-0">
                 <Text
                   className="text-[18px] font-bold"
                   style={{ color: textColor }}
@@ -400,10 +413,10 @@ export function HomeScreen() {
               </View>
               {!!banner.ctaText && banner.navigateTo !== 'none' && (
                 <View
-                  className="relative self-start rounded-full px-3 py-1.5 mt-3"
+                  className="relative self-start rounded-full px-3 py-1.5 mt-3 max-w-full"
                   style={{ backgroundColor: banner.ctaColor || '#1A6FFF' }}
                 >
-                  <Text className="text-[11px] font-semibold" style={{ color: (banner.ctaColor || '').toLowerCase() === '#ffffff' ? '#1A6FFF' : '#FFFFFF' }}>{banner.ctaText}</Text>
+                  <Text className="text-[11px] font-semibold" style={{ color: (banner.ctaColor || '').toLowerCase() === '#ffffff' ? '#1A6FFF' : '#FFFFFF' }} numberOfLines={1}>{banner.ctaText}</Text>
                 </View>
               )}
               </PressableScale>
@@ -412,42 +425,47 @@ export function HomeScreen() {
         </ScrollView>
       )}
 
-      <View ref={actionsRef} onLayout={() => measureTarget('actions', actionsRef)} className="px-4 mt-4 flex-row gap-3">
-        <PressableScale onPress={() => go('buyTypes')} className="flex-1 min-h-[104px] rounded-xl p-4 justify-between bg-brand-600">
+      <View
+        ref={actionsRef}
+        onLayout={() => measureTarget('actions', actionsRef)}
+        className="mt-4 flex-row gap-3"
+        style={{ paddingHorizontal: layout.gutter }}
+      >
+        <PressableScale onPress={() => go('buyTypes')} className="flex-1 min-h-[104px] min-w-0 rounded-xl p-4 justify-between bg-brand-600">
           <Icon name="home" size={26} color="white" />
-          <View>
+          <View className="min-w-0">
             <Text className="text-[16px] font-bold text-white">Buy</Text>
-            <Text className="text-[11px] text-white/80">Browse properties</Text>
+            <Text className="text-[11px] text-white/80" numberOfLines={1}>Browse properties</Text>
           </View>
         </PressableScale>
-        <PressableScale onPress={() => go('sellTypes')} className="flex-1 min-h-[104px] rounded-xl p-4 justify-between bg-brand-50">
+        <PressableScale onPress={() => go('sellTypes')} className="flex-1 min-h-[104px] min-w-0 rounded-xl p-4 justify-between bg-brand-50">
           <Icon name="tag" size={26} color="#1A6FFF" />
-          <View>
+          <View className="min-w-0">
             <Text className="text-[16px] font-bold text-brand-600">Sell</Text>
-            <Text className="text-[11px] text-brand-600/70">List your property</Text>
+            <Text className="text-[11px] text-brand-600/70" numberOfLines={1}>List your property</Text>
           </View>
         </PressableScale>
       </View>
 
-      <View className="px-4 mt-3 flex-row gap-2">
+      <View className="mt-3 flex-row gap-2" style={{ paddingHorizontal: layout.gutter }}>
         {[[String(featured.length + upcoming.length), 'Loaded listings'], ['0%', 'Brokerage'], ['24×7', 'Support']].map(([n, l]) => (
-          <FadeInView key={l} className="flex-1 p-2.5 bg-ink-50 rounded-card items-center">
+          <FadeInView key={l} className="flex-1 min-w-0 p-2.5 bg-ink-50 rounded-card items-center">
             <AnimatedNumber value={n} className="text-[15px] font-bold text-brand-600 leading-display" />
-            <Text className="text-[10.5px] text-ink-500 mt-1">{l}</Text>
+            <Text className="text-[10.5px] text-ink-500 mt-1 text-center" numberOfLines={2}>{l}</Text>
           </FadeInView>
         ))}
       </View>
 
-      {feedError && <View className="px-4 mt-4"><ErrorCard message={feedError} onRetry={loadHomeFeed} /></View>}
+      {feedError && <View style={{ paddingHorizontal: layout.gutter, marginTop: 16 }}><ErrorCard message={feedError} onRetry={loadHomeFeed} /></View>}
 
       {showFeaturedSection && (
         <>
-          <View className="px-4 mt-6 flex-row items-center justify-between">
-            <View>
-              <Text className="text-[15px] font-bold">Featured Properties</Text>
-              <Text className="text-[11px] text-ink-500">Hand-picked, ready to move in</Text>
+          <View className="mt-6 flex-row items-center justify-between" style={{ paddingHorizontal: layout.gutter }}>
+            <View className="flex-1 min-w-0 pr-3">
+              <Text className="text-[15px] font-bold" numberOfLines={1}>Featured Properties</Text>
+              <Text className="text-[11px] text-ink-500" numberOfLines={1}>Hand-picked, ready to move in</Text>
             </View>
-            <Pressable onPress={() => go('featured')} className="flex-row items-center gap-1">
+            <Pressable onPress={() => go('featured')} hitSlop={8} className="flex-row items-center gap-1 min-h-[44px] shrink-0 justify-center">
               <Text className="text-brand-600 text-[12px] font-semibold">See All</Text>
               <Icon name="arrow-right" size={12} color="#1A6FFF" />
             </Pressable>
@@ -457,7 +475,13 @@ export function HomeScreen() {
           ) : featured.length === 0 ? (
             <EmptyState icon="home" title="No featured properties yet" body="Check back after new verified listings are published." />
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-3 pl-4" contentContainerStyle={{ gap: 12, paddingRight: 16 }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="mt-3"
+              style={{ paddingLeft: layout.gutter }}
+              contentContainerStyle={{ gap: layout.gap, paddingRight: layout.gutter }}
+            >
               {featured.slice(0, 5).map((p, idx) => (
                 <FadeInView
                   key={p.id}
@@ -469,9 +493,9 @@ export function HomeScreen() {
                     width: 40,
                     height: 40,
                   })) : undefined}
-                  style={{ width: 240 }}
+                  style={{ width: layout.carouselCardWidth }}
                 >
-                  <PropertyCard p={p} fav={fav.has(p.id)} onFav={() => handleFavorite(p.id)} onPress={() => go('propertyDetail', { p })} />
+                  <PropertyCard p={p} fav={fav.has(p.id)} onFav={() => handleFavorite(p.id)} onPress={() => go('propertyDetail', { p, propertyId: p.id })} />
                 </FadeInView>
               ))}
             </ScrollView>
@@ -481,12 +505,12 @@ export function HomeScreen() {
 
       {showUpcomingSection && (
         <>
-          <View className="px-4 mt-6 flex-row items-center justify-between">
-            <View>
-              <Text className="text-[15px] font-bold">Upcoming Properties</Text>
-              <Text className="text-[11px] text-ink-500">Book early access</Text>
+          <View className="mt-6 flex-row items-center justify-between" style={{ paddingHorizontal: layout.gutter }}>
+            <View className="flex-1 min-w-0 pr-3">
+              <Text className="text-[15px] font-bold" numberOfLines={1}>Upcoming Properties</Text>
+              <Text className="text-[11px] text-ink-500" numberOfLines={1}>Book early access</Text>
             </View>
-            <Pressable onPress={() => go('upcoming')} className="flex-row items-center gap-1">
+            <Pressable onPress={() => go('upcoming')} hitSlop={8} className="flex-row items-center gap-1 min-h-[44px] shrink-0 justify-center">
               <Text className="text-brand-600 text-[12px] font-semibold">See All</Text>
               <Icon name="arrow-right" size={12} color="#1A6FFF" />
             </Pressable>
@@ -496,18 +520,24 @@ export function HomeScreen() {
           ) : upcoming.length === 0 ? (
             <EmptyState icon="clock" title="No upcoming launches right now" body="New launch windows will appear here." />
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-3 pl-4" contentContainerStyle={{ gap: 12, paddingRight: 16 }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="mt-3"
+              style={{ paddingLeft: layout.gutter }}
+              contentContainerStyle={{ gap: layout.gap, paddingRight: layout.gutter }}
+            >
               {upcoming.slice(0, 3).map((p, idx) => (
-                <FadeInView key={p.id} delay={idx * 70} style={{ width: 240 }} className="bg-white rounded-card border border-ink-200 overflow-hidden">
-                  <Pressable onPress={() => go('propertyDetail', { p })}>
-                    <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={130}>
+                <FadeInView key={p.id} delay={idx * 70} style={{ width: layout.carouselCardWidth }} className="bg-white rounded-card border border-ink-200 overflow-hidden">
+                  <Pressable onPress={() => go('propertyDetail', { p, propertyId: p.id })}>
+                    <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={layout.isTablet ? 150 : 130}>
                       <View className="absolute top-2 left-2"><Badge color="amber">Upcoming</Badge></View>
-                      <View className="absolute top-2 right-2"><Heart active={fav.has(p.id)} onPress={() => handleFavorite(p.id)} /></View>
+                      <View className="absolute top-2 right-2"><Heart active={fav.has(p.id)} onPress={() => handleFavorite(p.id)} compact /></View>
                     </PhotoPlaceholder>
                   </Pressable>
                   <View className="p-3">
-                    <Text className="text-[13px] font-semibold" numberOfLines={1}>{p.title}</Text>
-                    <Text className="text-[12px] text-ink-500 mt-0.5">{p.location}, {p.city}</Text>
+                    <Text className="text-[13px] font-semibold" numberOfLines={2}>{p.title}</Text>
+                    <Text className="text-[12px] text-ink-500 mt-0.5" numberOfLines={1}>{p.location}, {p.city}</Text>
                     <Text className="text-[14px] font-bold text-brand-600 mt-1">{formatINR(p.price)}</Text>
                     <View className="mt-2 bg-ink-900 px-2 py-1 rounded self-start flex-row items-center gap-1">
                       <Icon name="clock" size={10} color="white" />
@@ -521,14 +551,14 @@ export function HomeScreen() {
         </>
       )}
 
-      <View className="px-4 mt-6">
+      <View style={{ paddingHorizontal: layout.gutter, marginTop: 24 }}>
         <PressableScale onPress={() => go('help')} className="flex-row items-center gap-3 p-4 rounded-card border border-brand-200 bg-brand-50">
           <View className="w-10 h-10 rounded-full bg-brand-600 items-center justify-center">
             <Icon name="headphones" size={18} color="white" />
           </View>
-          <View className="flex-1">
-            <Text className="text-[14px] font-semibold text-brand-700">Need help finding a home?</Text>
-            <Text className="text-[11px] text-brand-600">Chat with our property advisor</Text>
+          <View className="flex-1 min-w-0">
+            <Text className="text-[14px] font-semibold text-brand-700" numberOfLines={2}>Need help finding a home?</Text>
+            <Text className="text-[11px] text-brand-600" numberOfLines={1}>Chat with our property advisor</Text>
           </View>
           <Icon name="arrow-right" size={16} color="#1A6FFF" />
         </PressableScale>
@@ -539,22 +569,18 @@ export function HomeScreen() {
   );
 }
 
-function useBrowseTypeGridLayout() {
-  const { width } = useWindowDimensions();
-  const gap = 10;
-  const pad = 16;
-  const columns = width < 360 ? 3 : 4;
-  const itemWidth = (width - pad * 2 - gap * (columns - 1)) / columns;
-  const iconBox = Math.round(Math.min(48, Math.max(36, itemWidth * 0.5)));
+function useLocalBrowseTypeGridLayout() {
+  const { columns, gap, pad, itemWidth, layout } = useBrowseTypeGridLayout();
+  const iconBox = Math.round(Math.min(layout.isTablet ? 56 : 48, Math.max(36, itemWidth * 0.5)));
   const iconSize = Math.round(iconBox * 0.45);
-  const fontSize = width < 360 ? 9.5 : 10.5;
-  return { gap, itemWidth, iconBox, iconSize, fontSize };
+  const fontSize = layout.isPhoneSm ? 9.5 : layout.isTablet ? 12 : 10.5;
+  return { gap, pad, itemWidth, iconBox, iconSize, fontSize, columns, layout };
 }
 
 // ─── H-02 Search ─────────────────────────────────────────────
 export function SearchScreen() {
   const { go, back } = useNav();
-  const browseTypeGrid = useBrowseTypeGridLayout();
+  const browseTypeGrid = useLocalBrowseTypeGridLayout();
   const { authToken, getCachedValue, setCachedValue } = useAppState();
   const [q, setQ] = useState('');
   const [recents, setRecents] = useState<string[]>([]);
@@ -637,20 +663,20 @@ export function SearchScreen() {
   }, [authToken, q, recentCacheKey, setCachedValue]);
   return (
     <Screen>
-      <View className="px-4 pt-2 pb-3 flex-row items-center gap-2">
-        <Pressable onPress={back} className="-ml-1 p-2 rounded-full">
+      <View className="pt-2 pb-3 flex-row items-center gap-2" style={{ paddingHorizontal: browseTypeGrid.pad }}>
+        <Pressable onPress={back} hitSlop={8} className="-ml-1 min-w-[44px] min-h-[44px] items-center justify-center rounded-full">
           <Icon name="arrow-left" size={20} color="#0F172A" />
         </Pressable>
-        <View className="flex-1">
+        <View className="flex-1 min-w-0">
           <Input icon="search" placeholder="Search city, area or property" value={q} onChangeText={setQ} />
         </View>
         {!!q && (
-          <Pressable onPress={() => go('filters')} className="w-10 h-10 rounded-card bg-brand-50 items-center justify-center">
+          <Pressable onPress={() => go('filters', { city: q })} className="w-11 h-11 rounded-card bg-brand-50 items-center justify-center">
             <Icon name="sliders-horizontal" size={16} color="#1A6FFF" />
           </Pressable>
         )}
       </View>
-      <View className="px-4">
+      <View style={{ paddingHorizontal: browseTypeGrid.pad }}>
         {!q && (
           <>
             <View className="mb-5">
@@ -664,7 +690,7 @@ export function SearchScreen() {
                 {recents.map((r, i) => (
                   <Pressable key={i} onPress={() => setQ(r)} className="flex-row items-center gap-3 p-3 rounded-card">
                     <Icon name="clock" size={14} color="#94A3B8" />
-                    <Text className="flex-1 text-[14px]">{r}</Text>
+                    <Text className="flex-1 min-w-0 text-[14px]" numberOfLines={1}>{r}</Text>
                     <Icon name="arrow-up-left" size={14} color="#94A3B8" />
                   </Pressable>
                 ))}
@@ -708,7 +734,7 @@ export function SearchScreen() {
         )}
         {!!q && (
           <View className="mt-2 gap-2">
-            <Text className="text-[11px] text-ink-500">{searching ? 'Searching...' : `${results.length} results for "${q}"`}</Text>
+            <Text className="text-[11px] text-ink-500" numberOfLines={2}>{searching ? 'Searching...' : `${results.length} results for "${q}"`}</Text>
             {searchError && <ErrorCard message={searchError} />}
             {searching ? (
               <CompactLoadingBlock label="Searching properties..." />
@@ -717,7 +743,7 @@ export function SearchScreen() {
             ) : (
               results.map((p, idx) => (
                 <FadeInView key={p.id} delay={idx * 45}>
-                  <PropertyCard p={p} variant="compact" onPress={() => go('propertyDetail', { p })} />
+                  <PropertyCard p={p} variant="compact" onPress={() => go('propertyDetail', { p, propertyId: p.id })} />
                 </FadeInView>
               ))
             )}
@@ -731,6 +757,10 @@ export function SearchScreen() {
 // ─── H-03 Featured List ──────────────────────────────────────
 export function FeaturedListScreen() {
   const { go, back } = useNav();
+  const layout = useLayout();
+  const gridCols = Math.max(2, layout.propertyColumns);
+  const gridGap = layout.gap;
+  const gridItemW = gridItemWidth(layout.contentWidth - layout.gutter * 2, gridCols, gridGap);
   const { fav, getCachedValue, setCachedValue, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
   const [view, setView] = useState<'list' | 'grid'>('list');
   const [sort, setSort] = useState('newest');
@@ -790,27 +820,25 @@ export function FeaturedListScreen() {
         onBack={back}
         title="Featured Properties"
         sub={`${list.length} hand-picked listings`}
-        right={
-          <View className="flex-row items-center gap-1.5">
-            <Pressable onPress={() => go('filters')} className="w-8 h-8 rounded-full bg-ink-100 items-center justify-center">
-              <Icon name="sliders-horizontal" size={14} color="#334155" />
-            </Pressable>
-            <Pressable onPress={() => setShowSort(true)} className="h-8 px-2 rounded-full bg-ink-100 flex-row items-center gap-1">
-              <Icon name="arrow-up-down" size={11} color="#334155" />
-              <Text className="text-[11px] font-medium text-ink-700">Sort</Text>
-            </Pressable>
-            <View className="flex-row bg-ink-100 rounded-full p-0.5">
-              <Pressable onPress={() => setView('list')} className={`px-2 py-1 rounded-full ${view === 'list' ? 'bg-white' : ''}`}>
-                <Icon name="list" size={14} color="#0F172A" />
-              </Pressable>
-              <Pressable onPress={() => setView('grid')} className={`px-2 py-1 rounded-full ${view === 'grid' ? 'bg-white' : ''}`}>
-                <Icon name="grid-3x3" size={14} color="#0F172A" />
-              </Pressable>
-            </View>
-          </View>
-        }
       />
-      <View className="px-4 pb-6">
+      <View className="flex-row flex-wrap items-center justify-end gap-1.5 pb-3" style={{ paddingHorizontal: layout.gutter }}>
+        <Pressable onPress={() => go('filters')} className="w-11 h-11 rounded-full bg-ink-100 items-center justify-center">
+          <Icon name="sliders-horizontal" size={14} color="#334155" />
+        </Pressable>
+        <Pressable onPress={() => setShowSort(true)} className="h-11 px-3 rounded-full bg-ink-100 flex-row items-center gap-1">
+          <Icon name="arrow-up-down" size={11} color="#334155" />
+          <Text className="text-[11px] font-medium text-ink-700">Sort</Text>
+        </Pressable>
+        <View className="flex-row bg-ink-100 rounded-full p-0.5">
+          <Pressable onPress={() => setView('list')} className={`px-2.5 py-2 rounded-full ${view === 'list' ? 'bg-white' : ''}`}>
+            <Icon name="list" size={14} color="#0F172A" />
+          </Pressable>
+          <Pressable onPress={() => setView('grid')} className={`px-2.5 py-2 rounded-full ${view === 'grid' ? 'bg-white' : ''}`}>
+            <Icon name="grid-3x3" size={14} color="#0F172A" />
+          </Pressable>
+        </View>
+      </View>
+      <View className="pb-6" style={{ paddingHorizontal: layout.gutter }}>
         {listError && <View className="mb-3"><ErrorCard message={listError} onRetry={loadFeatured} /></View>}
         {loading ? (
           <LoadingBlock label="Loading featured properties..." />
@@ -820,21 +848,21 @@ export function FeaturedListScreen() {
           <View className="gap-3">
             {sortedList.map((p, idx) => (
               <FadeInView key={p.id} delay={idx * 35}>
-                <PropertyCard p={p} fav={fav.has(p.id)} onFav={() => handleFavorite(p.id)} onPress={() => go('propertyDetail', { p })} />
+                <PropertyCard p={p} fav={fav.has(p.id)} onFav={() => handleFavorite(p.id)} onPress={() => go('propertyDetail', { p, propertyId: p.id })} />
               </FadeInView>
             ))}
           </View>
         ) : (
-          <View className="flex-row flex-wrap gap-3">
+          <View className="flex-row flex-wrap" style={{ gap: gridGap }}>
             {sortedList.map((p, idx) => (
-              <FadeInView key={p.id} delay={idx * 35} style={{ width: '47%' }} className="bg-white border border-ink-200 rounded-card overflow-hidden">
-              <Pressable onPress={() => go('propertyDetail', { p })}>
-                <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={110}>
+              <FadeInView key={p.id} delay={idx * 35} style={{ width: gridItemW }} className="bg-white border border-ink-200 rounded-card overflow-hidden">
+              <Pressable onPress={() => go('propertyDetail', { p, propertyId: p.id })}>
+                <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={layout.isTablet ? 140 : 110}>
                   <View className="absolute top-2 left-2"><Badge color="brand">{formatPropertyTypeLabel(p.type)}</Badge></View>
-                  <View className="absolute top-2 right-2"><Heart active={fav.has(p.id)} onPress={() => handleFavorite(p.id)} /></View>
+                  <View className="absolute top-2 right-2"><Heart active={fav.has(p.id)} onPress={() => handleFavorite(p.id)} compact /></View>
                 </PhotoPlaceholder>
                 <View className="p-2.5">
-                  <Text className="text-[12px] font-semibold" numberOfLines={1}>{p.title}</Text>
+                  <Text className="text-[12px] font-semibold" numberOfLines={2}>{p.title}</Text>
                   <Text className="text-[10px] text-ink-500" numberOfLines={1}>{p.location}</Text>
                   <Text className="text-[13px] font-bold text-brand-600 mt-1">{formatINR(p.price)}</Text>
                 </View>
@@ -888,6 +916,7 @@ function Countdown({ date }: { date?: string }) {
 
 export function UpcomingListScreen() {
   const { go, back } = useNav();
+  const layout = useLayout();
   const { fav, getCachedValue, setCachedValue, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
   const [list, setList] = useState<DisplayProperty[]>([]);
   const [loading, setLoading] = useState(true);
@@ -935,49 +964,49 @@ export function UpcomingListScreen() {
   return (
     <Screen refreshing={refreshing} onRefresh={() => loadUpcoming(true)}>
       <TopBar onBack={back} title="Upcoming launches" sub="Be first to book" />
-      <View className="px-4">
+      <PageBody>
         {listError && <ErrorCard message={listError} onRetry={loadUpcoming} />}
-      </View>
+      </PageBody>
       {loading ? (
         <LoadingBlock label="Loading upcoming launches..." />
       ) : list.length === 0 ? (
         <EmptyState icon="clock" title="No upcoming properties right now" body="Upcoming launch alerts will appear here." />
       ) : (
-        <View className="px-4 gap-4">
+        <PageBody className="gap-4">
           {list.map((p, idx) => (
             <FadeInView key={p.id} delay={idx * 45} className="rounded-card border border-ink-200 overflow-hidden bg-white">
-              <Pressable onPress={() => go('propertyDetail', { p })}>
-                <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={150}>
+              <Pressable onPress={() => go('propertyDetail', { p, propertyId: p.id })}>
+                <PhotoPlaceholder tag={p.id} imageUri={p.images?.[0]} height={layout.isTablet ? 180 : layout.isPhoneSm ? 140 : 150}>
                   <View className="absolute top-3 left-3"><Badge color="amber">Coming soon</Badge></View>
-                  <View className="absolute top-3 right-3"><Heart active={fav.has(p.id)} onPress={() => handleFavorite(p.id)} /></View>
+                  <View className="absolute top-3 right-3"><Heart active={fav.has(p.id)} onPress={() => handleFavorite(p.id)} compact /></View>
                 </PhotoPlaceholder>
               </Pressable>
               <View className="p-3">
-                <View className="flex-row items-start justify-between gap-2">
-                  <Text className="font-semibold text-[15px] flex-1">{p.title}</Text>
-                  <Text className="text-brand-600 font-bold text-[14px]">{formatINR(p.price)}</Text>
+                <View className="flex-row flex-wrap items-start justify-between gap-2">
+                  <Text className="font-semibold text-[15px] flex-1 min-w-0" numberOfLines={2}>{p.title}</Text>
+                  <Text className="text-brand-600 font-bold text-[14px] shrink-0">{formatINR(p.price)}</Text>
                 </View>
                 <View className="flex-row items-center gap-1 mt-0.5">
                   <Icon name="map-pin" size={12} color="#64748B" />
-                  <Text className="text-[12px] text-ink-500">{p.location}, {p.city}</Text>
+                  <Text className="flex-1 min-w-0 text-[12px] text-ink-500" numberOfLines={1}>{p.location}, {p.city}</Text>
                 </View>
                 <Countdown date={p.launchDate} />
                 <View className="mt-3 flex-row items-center gap-3 p-2.5 rounded-md bg-ink-50">
                   <View className="w-9 h-9 rounded-full bg-white items-center justify-center">
                     <Icon name="bell" size={14} color="#1A6FFF" />
                   </View>
-                  <View className="flex-1">
+                  <View className="flex-1 min-w-0">
                     <Text className="text-[12px] font-bold">Launch alerts</Text>
-                    <Text className="text-ink-500 text-[10.5px]">Save the property to follow this launch</Text>
+                    <Text className="text-ink-500 text-[10.5px]" numberOfLines={2}>Save the property to follow this launch</Text>
                   </View>
-                  <Pressable onPress={() => fire('Save this property to follow launch updates.')} className="px-3 py-1.5 rounded-full bg-white border border-ink-200">
+                  <Pressable onPress={() => fire('Save this property to follow launch updates.')} className="px-3 py-1.5 rounded-full bg-white border border-ink-200 shrink-0">
                     <Text className="text-[10.5px] font-semibold text-ink-600">Info</Text>
                   </Pressable>
                 </View>
               </View>
             </FadeInView>
           ))}
-        </View>
+        </PageBody>
       )}
       <Toast message={msg} />
     </Screen>
@@ -987,6 +1016,10 @@ export function UpcomingListScreen() {
 // ─── H-05 Help & Support ─────────────────────────────────────
 export function HelpScreen() {
   const { go, back } = useNav();
+  const layout = useLayout();
+  const helpCols = layout.width < 360 ? 2 : 3;
+  const helpGap = layout.gap;
+  const helpTileW = gridItemWidth(layout.contentWidth - layout.gutter * 2, helpCols, helpGap);
   const { authToken, currentUser } = useAppState();
   const [open, setOpen] = useState<number | null>(null);
   const { items: faqs, loading: loadingFaqs, error: faqError, reload: reloadFaqs } = useContentSection('faq', fallbackFaqContent);
@@ -1063,9 +1096,16 @@ export function HelpScreen() {
   };
   const handleEmailSupport = async () => {
     try {
-      await Linking.openURL('mailto:support@builtglory.com');
+      const opened = await openCompanySupportEmail({
+        userName: currentUser?.name || currentUser?.fullName || null,
+        userEmail: currentUser?.email || null,
+        userId: String(currentUser?._id ?? currentUser?.id ?? currentUser?.referenceId ?? ''),
+      });
+      if (!opened) {
+        fire(`No email app found. Please email ${COMPANY_SUPPORT_EMAIL}.`);
+      }
     } catch {
-      fire('No email app found. Please email support@builtglory.com.');
+      fire(`No email app found. Please email ${COMPANY_SUPPORT_EMAIL}.`);
     }
   };
   useEffect(() => {
@@ -1074,44 +1114,35 @@ export function HelpScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Need help?" sub="We're here, 24×7" />
-      <View className="px-4">
+      <PageBody>
         {supportError && <View className="mb-4"><ErrorCard message={supportError} onRetry={loadTickets} /></View>}
         {!authToken && (
           <View className="mb-4">
             <ErrorCard message="Please sign in again to create callbacks or support tickets." />
           </View>
         )}
-        <View className="flex-row gap-2 mb-6 flex-wrap">
-          <Pressable
-            onPress={() => {
-              go('supportTickets');
-            }}
-            className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center"
-          >
-            <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="message-circle" size={18} color="#1A6FFF" /></View>
-            <Text className="text-[12.5px] font-semibold">Support ticket</Text>
-            <Text className="text-[10px] text-ink-500">Tracked</Text>
-          </Pressable>
-          <Pressable onPress={() => setCallbackModal(true)} className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center">
-            <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="phone-call" size={18} color="#1A6FFF" /></View>
-            <Text className="text-[12.5px] font-semibold">Callback</Text>
-            <Text className="text-[10px] text-ink-500">Free</Text>
-          </Pressable>
-          <Pressable onPress={() => void openCompanyCall()} className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center">
-            <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="phone" size={18} color="#1A6FFF" /></View>
-            <Text className="text-[12.5px] font-semibold">Call</Text>
-            <Text className="text-[10px] text-ink-500">Now</Text>
-          </Pressable>
-          <Pressable onPress={() => void openCompanyWhatsApp()} className="flex-1 min-w-[30%] p-3 rounded-card border border-emerald-200 bg-emerald-50 items-center">
-            <View className="w-10 h-10 rounded-full bg-emerald-100 items-center justify-center mb-2"><Icon name="message-circle" size={18} color="#059669" /></View>
-            <Text className="text-[12.5px] font-semibold text-emerald-800">WhatsApp</Text>
-            <Text className="text-[10px] text-emerald-700">Chat</Text>
-          </Pressable>
-          <Pressable onPress={handleEmailSupport} className="flex-1 min-w-[30%] p-3 rounded-card border border-ink-200 items-center">
-            <View className="w-10 h-10 rounded-full bg-brand-50 items-center justify-center mb-2"><Icon name="mail" size={18} color="#1A6FFF" /></View>
-            <Text className="text-[12.5px] font-semibold">Email</Text>
-            <Text className="text-[10px] text-ink-500">24 hrs</Text>
-          </Pressable>
+        <View className="flex-row flex-wrap mb-6" style={{ gap: helpGap }}>
+          {[
+            { key: 'live', label: 'Live Chat', sub: '< 2 hrs', icon: 'message-circle', onPress: () => go('liveChat'), accent: 'border-brand-200 bg-brand-50', iconBg: 'bg-brand-100', iconColor: '#1A6FFF' },
+            { key: 'ticket', label: 'Support ticket', sub: 'Tracked', icon: 'message-circle', onPress: () => go('supportTickets'), accent: 'border-ink-200', iconBg: 'bg-brand-50', iconColor: '#1A6FFF' },
+            { key: 'callback', label: 'Callback', sub: 'Free', icon: 'phone-call', onPress: () => setCallbackModal(true), accent: 'border-ink-200', iconBg: 'bg-brand-50', iconColor: '#1A6FFF' },
+            { key: 'call', label: 'Call', sub: 'Now', icon: 'phone', onPress: () => void openCompanyCall(), accent: 'border-ink-200', iconBg: 'bg-brand-50', iconColor: '#1A6FFF' },
+            { key: 'wa', label: 'WhatsApp', sub: 'Chat', icon: 'message-circle', onPress: () => void openCompanyWhatsApp(), accent: 'border-emerald-200 bg-emerald-50', iconBg: 'bg-emerald-100', iconColor: '#059669', labelClass: 'text-emerald-800', subClass: 'text-emerald-700' },
+            { key: 'email', label: 'Email', sub: '24 hrs', icon: 'mail', onPress: handleEmailSupport, accent: 'border-ink-200', iconBg: 'bg-brand-50', iconColor: '#1A6FFF' },
+          ].map((item) => (
+            <Pressable
+              key={item.key}
+              onPress={item.onPress}
+              style={{ width: helpTileW }}
+              className={`p-3 rounded-card border items-center ${item.accent}`}
+            >
+              <View className={`w-10 h-10 rounded-full ${item.iconBg} items-center justify-center mb-2`}>
+                <Icon name={item.icon} size={18} color={item.iconColor} />
+              </View>
+              <Text className={`text-[12.5px] font-semibold text-center ${item.labelClass || ''}`} numberOfLines={2}>{item.label}</Text>
+              <Text className={`text-[10px] text-center ${item.subClass || 'text-ink-500'}`} numberOfLines={1}>{item.sub}</Text>
+            </Pressable>
+          ))}
         </View>
         <Text className="text-[14px] font-semibold mb-2">Frequently asked</Text>
         {loadingFaqs && <Text className="mb-2 text-[12px] text-ink-500">Loading help content...</Text>}
@@ -1124,7 +1155,7 @@ export function HelpScreen() {
           {faqs.slice(0, 5).map((f, i) => (
             <View key={i} className={i ? 'border-t border-ink-200' : ''}>
               <Pressable onPress={() => setOpen(open === i ? null : i)} className="flex-row items-center justify-between gap-2 p-3.5">
-                <Text className="text-[13px] font-medium flex-1">{f.title}</Text>
+                <Text className="text-[13px] font-medium flex-1 min-w-0">{f.title}</Text>
                 <Icon name={open === i ? 'chevron-up' : 'chevron-down'} size={16} color="#64748B" />
               </Pressable>
               {open === i && <Text className="px-3.5 pb-3.5 text-[12.5px] text-ink-500 leading-relaxed">{f.body}</Text>}
@@ -1157,7 +1188,7 @@ export function HelpScreen() {
             ))}
           </View>
         )}
-      </View>
+      </PageBody>
       {callbackModal && (
         <Sheet onClose={() => setCallbackModal(false)} title="Request a Callback">
           <View className="gap-3">
@@ -1208,6 +1239,71 @@ function ticketDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Just now';
   return date.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function chatStatusLabel(status?: string) {
+  if (status === 'closed' || status === 'resolved') return 'Closed';
+  if (status === 'in_progress') return 'Waiting';
+  return 'Open';
+}
+
+function chatStatusColor(status?: string): string {
+  if (status === 'closed' || status === 'resolved') return 'ink';
+  if (status === 'in_progress') return 'amber';
+  return 'brand';
+}
+
+function connectionLabel(state: ChatConnectionState) {
+  if (state === 'connected') return 'Connected';
+  if (state === 'reconnecting') return 'Reconnecting…';
+  if (state === 'connecting') return 'Connecting…';
+  if (state === 'failed') return 'Connection failed';
+  return 'Disconnected';
+}
+
+function makeClientMessageId() {
+  return `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+type LocalChatMessage = {
+  id: string;
+  clientMessageId?: string;
+  message: string;
+  responderType: string;
+  createdAt?: string;
+  readAt?: string;
+  pending?: boolean;
+  failed?: boolean;
+};
+
+function buildThread(ticket: SupportTicket | null, pending: LocalChatMessage[] = []): LocalChatMessage[] {
+  if (!ticket) return pending;
+  const base: LocalChatMessage[] = [
+    {
+      id: 'original',
+      message: ticket.message ?? '',
+      responderType: 'customer',
+      createdAt: ticket.createdAt,
+    },
+    ...(ticket.responses ?? []).map((item, index) => ({
+      id: String(item._id ?? item.id ?? `resp-${index}`),
+      clientMessageId: item.clientMessageId,
+      message: item.message ?? '',
+      responderType: item.responderType ?? 'customer',
+      createdAt: item.createdAt,
+      readAt: item.readAt,
+    })),
+  ].filter((item) => item.message);
+
+  const known = new Set(
+    base.flatMap((item) => [item.id, item.clientMessageId].filter(Boolean) as string[]),
+  );
+  const extras = pending.filter((item) => {
+    if (item.clientMessageId && known.has(item.clientMessageId)) return false;
+    if (known.has(item.id)) return false;
+    return true;
+  });
+  return [...base, ...extras];
 }
 
 // ─── H-06 Support Tickets ──────────────────────────────────────
@@ -1271,7 +1367,7 @@ export function SupportTicketsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Support tickets" sub="Create tickets and view ticket history" />
-      <View className="px-4 gap-4">
+      <PageBody className="gap-4">
         {error && <ErrorCard message={error} onRetry={loadTickets} />}
         {!authToken && <ErrorCard message="Please sign in again to use support tickets." />}
 
@@ -1309,30 +1405,145 @@ export function SupportTicketsScreen() {
           <View className="gap-2">
             {tickets.map((ticket) => {
               const id = ticketIdOf(ticket);
+              const unread = ticket.unreadCustomerCount || 0;
               return (
                 <Pressable key={id || ticket.referenceId} onPress={() => go('supportTicketChat', { ticketId: id })} className="p-3 rounded-card border border-ink-200 bg-white">
                   <View className="flex-row items-center justify-between gap-2">
                     <Text className="text-[13px] font-semibold flex-1" numberOfLines={1}>{ticket.subject ?? 'Support ticket'}</Text>
-                    <Badge color={ticket.status === 'resolved' ? 'green' : 'brand'}>{ticket.status ?? 'open'}</Badge>
+                    <Badge color={chatStatusColor(ticket.status)}>{chatStatusLabel(ticket.status)}</Badge>
                   </View>
                   <Text className="text-[11px] text-ink-500 mt-1">{ticket.referenceId ?? 'Reference pending'}</Text>
                   <Text className="text-[11px] text-ink-500 mt-1">{ticketDate(ticket.createdAt)}</Text>
-                  <Text className="text-[11px] font-semibold text-brand-600 mt-2">View chat</Text>
+                  <View className="flex-row items-center justify-between mt-2">
+                    <Text className="text-[11px] font-semibold text-brand-600">View chat</Text>
+                    {unread > 0 ? (
+                      <View className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 items-center justify-center">
+                        <Text className="text-white text-[10px] font-bold">{unread > 99 ? '99+' : unread}</Text>
+                      </View>
+                    ) : null}
+                  </View>
                 </Pressable>
               );
             })}
           </View>
         )}
-      </View>
+      </PageBody>
       <Toast message={msg} />
     </Screen>
   );
 }
 
+// ─── Live Chat entry (start or resume) ─────────────────────────
+function liveChatErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof CustomerApiError) {
+    if (error.status === 429 || error.code === 'RATE_LIMITED') {
+      return 'Too many requests right now. Wait a moment, then try again.';
+    }
+    return error.message || fallback;
+  }
+  return fallback;
+}
+
+export function LiveChatScreen() {
+  const { back, go } = useNav();
+  const { authToken } = useAppState();
+  const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [active, setActive] = useState<SupportTicket | null>(null);
+  const startingRef = useRef(false);
+
+  const openChat = useCallback((chat: SupportTicket) => {
+    const ticketId = ticketIdOf(chat);
+    if (!ticketId) {
+      setError('Live chat opened, but ticket details are missing. Please try again.');
+      return;
+    }
+    go('supportTicketChat', { ticketId, liveChat: true });
+  }, [go]);
+
+  const loadActive = useCallback(async () => {
+    if (!authToken) {
+      setActive(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const chat = await getActiveLiveChat(authToken);
+      setActive(chat);
+    } catch (err) {
+      setError(liveChatErrorMessage(err, 'Could not load live chat. Please try again.'));
+    } finally {
+      setLoading(false);
+    }
+  }, [authToken]);
+
+  useEffect(() => {
+    loadActive();
+  }, [loadActive]);
+
+  const start = async () => {
+    if (!authToken || startingRef.current) return;
+    startingRef.current = true;
+    setStarting(true);
+    setError(null);
+    try {
+      const chat = await startLiveChat(authToken, {
+        subject: 'Live Chat',
+        message: 'Hi, I need help.',
+        category: 'general',
+      });
+      setActive(chat);
+      openChat(chat);
+    } catch (err) {
+      setError(liveChatErrorMessage(err, 'Could not start live chat. Please try again.'));
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
+    }
+  };
+
+  return (
+    <Screen>
+      <TopBar onBack={back} title="Live Chat" sub="Chat with BuiltGlory support" />
+      <PageBody className="gap-3">
+        {error && <ErrorCard message={error} onRetry={loadActive} />}
+        {!authToken && <ErrorCard message="Please sign in again to use live chat." />}
+        {loading ? (
+          <LoadingBlock label="Checking for an open chat..." />
+        ) : (
+          <View className="rounded-card border border-ink-200 p-5 items-center bg-white">
+            <View className="w-14 h-14 rounded-full bg-brand-50 items-center justify-center mb-3">
+              <Icon name="message-circle" size={24} color="#1A6FFF" />
+            </View>
+            <Text className="text-[16px] font-semibold text-ink-900">Live Chat</Text>
+            <Text className="text-[12.5px] text-ink-500 text-center mt-1 leading-5 px-1">
+              Typically replies in &lt; 2 hours. Start a conversation and our support team will reply in real time.
+            </Text>
+            {active ? (
+              <Btn className="w-full mt-4" onPress={() => openChat(active)}>
+                Continue chat
+              </Btn>
+            ) : (
+              <Btn className="w-full mt-4" disabled={!authToken || starting} onPress={start}>
+                {starting ? 'Starting...' : 'Start live chat'}
+              </Btn>
+            )}
+          </View>
+        )}
+      </PageBody>
+    </Screen>
+  );
+}
+
 export function SupportTicketChatScreen() {
-  const { back, ctx } = useNav<{ ticketId?: string }>();
+  const { back, ctx } = useNav<{ ticketId?: string; liveChat?: boolean }>();
   const { authToken } = useAppState();
   const insets = useSafeAreaInsets();
+  const layout = useLayout();
+  const bubbleMaxWidth = Math.round(layout.contentWidth * (layout.isTablet ? 0.62 : layout.isPhoneSm ? 0.88 : 0.82));
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardBottomInset, setKeyboardBottomInset] = useState(0);
   const composerKeyboardGap = Platform.OS === 'android' && keyboardVisible ? 12 : 0;
@@ -1340,11 +1551,31 @@ export function SupportTicketChatScreen() {
   const socketRef = useRef<ChatSocket | null>(null);
   const messagesScrollRef = useRef<ScrollView | null>(null);
   const [ticket, setTicket] = useState<SupportTicket | null>(null);
+  const [pendingMessages, setPendingMessages] = useState<LocalChatMessage[]>([]);
   const [reply, setReply] = useState('');
   const [loading, setLoading] = useState(true);
   const [replying, setReplying] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connectionState, setConnectionState] = useState<ChatConnectionState>('connecting');
   const { msg, fire } = useToast();
+
+  const applyTicket = useCallback((next: SupportTicket) => {
+    setTicket(next);
+    setPendingMessages((current) => {
+      const known = new Set(
+        (next.responses ?? [])
+          .flatMap((item) => [item.clientMessageId, item._id, item.id])
+          .filter(Boolean)
+          .map(String),
+      );
+      return current.filter((item) => {
+        if (item.failed) return true;
+        if (item.clientMessageId && known.has(item.clientMessageId)) return false;
+        return true;
+      });
+    });
+  }, []);
 
   const loadTicket = useCallback(async () => {
     if (!authToken || !ticketId) {
@@ -1355,13 +1586,15 @@ export function SupportTicketChatScreen() {
     setLoading(true);
     setError(null);
     try {
-      setTicket(await getSupportTicket(authToken, ticketId));
+      const data = await getSupportTicket(authToken, ticketId);
+      applyTicket(data);
+      await markSupportTicketRead(authToken, ticketId).catch(() => undefined);
     } catch {
       setError('Could not load ticket conversation.');
     } finally {
       setLoading(false);
     }
-  }, [authToken, ticketId]);
+  }, [applyTicket, authToken, ticketId]);
 
   useEffect(() => {
     loadTicket();
@@ -1386,73 +1619,146 @@ export function SupportTicketChatScreen() {
     if (!authToken || !ticketId) return;
     const socket = createChatSocket(authToken);
     socketRef.current = socket;
+    setConnectionState(socket.connected ? 'connected' : 'connecting');
 
-    socket.on('support:ticket_updated', ({ ticket: updatedTicket }) => {
-      setTicket(updatedTicket);
+    const onTicketUpdated = ({ ticket: updatedTicket }: { ticket: SupportTicket }) => {
+      applyTicket(updatedTicket);
+    };
+    socket.on('support:ticket_updated', onTicketUpdated);
+    socket.on('support:message:new', ({ ticket: updatedTicket }) => {
+      if (updatedTicket) applyTicket(updatedTicket);
     });
     socket.on('connect', () => {
+      setConnectionState('connected');
       socket.emit('support:join', { ticketId }, (payload) => {
         if (payload.ok) {
-          setTicket(payload.ticket);
+          applyTicket(payload.ticket);
           setError(null);
         } else if (payload.error) {
           setError(payload.error);
         }
       });
+      getSupportTicket(authToken, ticketId)
+        .then(applyTicket)
+        .catch(() => undefined);
     });
+    socket.on('disconnect', () => setConnectionState('disconnected'));
+    socket.on('reconnect_attempt', () => setConnectionState('reconnecting'));
+    socket.io.on('reconnect', () => setConnectionState('connected'));
     socket.on('connect_error', () => {
+      setConnectionState((prev) => (prev === 'connected' ? 'reconnecting' : 'failed'));
       setError('Realtime chat is reconnecting. Messages will still send normally.');
     });
 
     return () => {
+      socket.emit('support:leave', { ticketId });
+      socket.off('support:ticket_updated', onTicketUpdated);
       socket.disconnect();
       if (socketRef.current === socket) socketRef.current = null;
     };
-  }, [authToken, ticketId]);
+  }, [applyTicket, authToken, ticketId]);
 
-  const submitReply = async () => {
-    const text = reply.trim();
-    if (!authToken || !ticketId || !text || replying) return;
+  const sendMessage = async (text: string, clientMessageId: string, isRetry = false) => {
+    if (!authToken || !ticketId || !text) return;
     setReplying(true);
     setError(null);
+
+    if (!isRetry) {
+      setPendingMessages((current) => [
+        ...current,
+        {
+          id: clientMessageId,
+          clientMessageId,
+          message: text,
+          responderType: 'customer',
+          createdAt: new Date().toISOString(),
+          pending: true,
+        },
+      ]);
+    } else {
+      setPendingMessages((current) =>
+        current.map((item) =>
+          item.clientMessageId === clientMessageId ? { ...item, pending: true, failed: false } : item,
+        ),
+      );
+    }
+
+    const markFailed = (message?: string) => {
+      setPendingMessages((current) =>
+        current.map((item) =>
+          item.clientMessageId === clientMessageId ? { ...item, pending: false, failed: true } : item,
+        ),
+      );
+      setError(message ?? 'Could not send message. Tap retry on the failed message.');
+    };
+
     const socket = socketRef.current;
     if (socket?.connected) {
-      socket.emit('support:send', { ticketId, message: text }, (payload) => {
+      socket.emit('support:send', { ticketId, message: text, clientMessageId }, (payload) => {
         setReplying(false);
         if (payload.ok) {
+          applyTicket(payload.ticket);
           setReply('');
-          setTicket(payload.ticket);
-          fire('Reply sent.');
         } else {
-          setError(payload.error ?? 'Could not send reply. Please try again.');
+          markFailed(payload.error);
         }
       });
       return;
     }
+
     try {
-      const updatedTicket = await addSupportTicketResponse(authToken, ticketId, text);
+      const updatedTicket = await addSupportTicketResponse(authToken, ticketId, text, clientMessageId);
+      applyTicket(updatedTicket);
       setReply('');
-      setTicket(updatedTicket);
-      fire('Reply sent.');
     } catch {
-      setError('Could not send reply. Please try again.');
+      markFailed();
     } finally {
       setReplying(false);
     }
   };
 
-  const thread = ticket
-    ? [
-        {
-          id: 'original',
-          message: ticket.message ?? '',
-          responderType: 'customer',
-          createdAt: ticket.createdAt,
-        },
-        ...(ticket.responses ?? []),
-      ].filter((item) => item.message)
-    : [];
-  const ticketClosed = ticket?.status === 'closed';
+  const submitReply = async () => {
+    const text = reply.trim();
+    if (!text || replying || ticketClosed) return;
+    await sendMessage(text, makeClientMessageId());
+  };
+
+  const retryMessage = async (item: LocalChatMessage) => {
+    if (!item.clientMessageId || !item.message || replying) return;
+    await sendMessage(item.message, item.clientMessageId, true);
+  };
+
+  const closeChat = async () => {
+    if (!authToken || !ticketId || statusBusy) return;
+    setStatusBusy(true);
+    try {
+      const updated = await closeSupportTicket(authToken, ticketId);
+      applyTicket(updated);
+      fire('Chat closed.');
+    } catch {
+      setError('Could not close this chat.');
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  const reopenChat = async () => {
+    if (!authToken || !ticketId || statusBusy) return;
+    setStatusBusy(true);
+    try {
+      const updated = await reopenSupportTicket(authToken, ticketId);
+      applyTicket(updated);
+      fire('Chat reopened.');
+    } catch {
+      setError('Could not reopen this chat.');
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  const thread = buildThread(ticket, pendingMessages);
+  const ticketClosed = ticket?.status === 'closed' || ticket?.status === 'resolved';
+  const unread = ticket?.unreadCustomerCount || 0;
 
   useEffect(() => {
     if (!ticket) return;
@@ -1464,40 +1770,55 @@ export function SupportTicketChatScreen() {
 
   return (
     <Screen fill>
-      <View className="px-4 pt-2 pb-3 flex-row items-center gap-3 border-b border-ink-200 bg-white">
-        <Pressable onPress={back} className="-ml-1 p-2 rounded-full">
+      <View
+        className="pt-2 pb-3 flex-row items-center gap-3 border-b border-ink-200 bg-white"
+        style={{ paddingHorizontal: layout.gutter, maxWidth: layout.contentMaxWidth ?? undefined, width: '100%', alignSelf: 'center' }}
+      >
+        <Pressable onPress={back} hitSlop={10} accessibilityRole="button" accessibilityLabel="Go back" className="-ml-1 min-w-[44px] min-h-[44px] items-center justify-center rounded-full">
           <Icon name="arrow-left" size={20} color="#0F172A" />
         </Pressable>
         <View className="w-10 h-10 rounded-full bg-brand-100 items-center justify-center">
           <Icon name="headphones" size={16} color="#1A6FFF" />
         </View>
         <View className="flex-1 min-w-0">
-          <Text className="text-[14px] font-semibold text-ink-900" numberOfLines={1}>{ticket?.subject ?? 'Support chat'}</Text>
-          <Text className="text-[10.5px] text-ink-500">{ticket?.referenceId ?? 'Ticket conversation'}</Text>
+          <Text className="text-[14px] font-semibold text-ink-900" numberOfLines={1}>
+            {ctx.liveChat || ticket?.channel === 'live_chat' ? 'Live Chat' : ticket?.subject ?? 'Support chat'}
+          </Text>
+          <Text className="text-[10.5px] text-ink-500" numberOfLines={1}>
+            {connectionLabel(connectionState)}
+            {ticket?.referenceId ? ` · ${ticket.referenceId}` : ''}
+            {unread > 0 ? ` · ${unread} unread` : ''}
+          </Text>
         </View>
-        {ticket && <Badge color={ticketClosed ? 'ink' : 'brand'}>{ticket.status ?? 'open'}</Badge>}
+        {ticket && <Badge color={chatStatusColor(ticket.status)}>{chatStatusLabel(ticket.status)}</Badge>}
       </View>
 
       <KeyboardAvoidingView
         className="flex-1 bg-ink-50"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
+        style={layout.contentMaxWidth ? { maxWidth: layout.contentMaxWidth, width: '100%', alignSelf: 'center' } : undefined}
       >
-        <View className="px-4 pt-3 gap-2">
+        <View className="pt-3 gap-2" style={{ paddingHorizontal: layout.gutter }}>
           {error && <ErrorCard message={error} onRetry={loadTicket} />}
           {!authToken && <ErrorCard message="Please sign in again to view this ticket." />}
           {!ticketId && <ErrorCard message="Ticket details are unavailable. Please open a ticket from history." />}
+          {connectionState !== 'connected' && (
+            <View className="px-3 py-2 rounded-card border border-amber-200 bg-amber-50">
+              <Text className="text-[11.5px] text-amber-800">{connectionLabel(connectionState)}. Messages stay available offline.</Text>
+            </View>
+          )}
         </View>
         {loading ? (
           <View className="flex-1 items-center justify-center px-6">
-            <LoadingBlock label="Loading ticket conversation..." />
+            <LoadingBlock label="Loading conversation..." />
           </View>
         ) : ticket ? (
           <>
             <ScrollView
               ref={messagesScrollRef}
-              className="flex-1 px-3"
-              contentContainerStyle={{ paddingTop: 12, paddingBottom: 14, gap: 8 }}
+              className="flex-1"
+              contentContainerStyle={{ paddingTop: 12, paddingBottom: 14, gap: 8, paddingHorizontal: layout.gutter }}
               showsVerticalScrollIndicator={false}
               onLayout={() => messagesScrollRef.current?.scrollToEnd({ animated: false })}
               onContentSizeChange={() => messagesScrollRef.current?.scrollToEnd({ animated: false })}
@@ -1505,38 +1826,81 @@ export function SupportTicketChatScreen() {
               <View className="self-center px-3 py-1 rounded-full bg-white/90 border border-ink-200">
                 <Text className="text-[10.5px] text-ink-500">{ticketDate(ticket.createdAt) || 'Today'}</Text>
               </View>
+              {thread.length === 0 ? (
+                <View className="mt-8 items-center px-6">
+                  <Text className="text-[13px] font-semibold text-ink-700">No messages yet</Text>
+                  <Text className="text-[11.5px] text-ink-500 text-center mt-1">Say hello and our support team will reply here.</Text>
+                </View>
+              ) : null}
               {thread.map((item, index) => {
-                const mine = item.responderType !== 'admin';
+                const system = item.responderType === 'system';
+                const mine = item.responderType === 'customer';
+                if (system) {
+                  return (
+                    <View key={item.id || `${item.responderType}-${index}`} className="self-center px-3 py-1 rounded-full bg-ink-100">
+                      <Text className="text-[10.5px] text-ink-500">{item.message}</Text>
+                    </View>
+                  );
+                }
                 return (
-                  <View key={item.id ?? item._id ?? `${item.responderType}-${index}`} className={`flex-row ${mine ? 'justify-end' : 'justify-start'}`}>
-                    <View className={`max-w-[82%] px-3 py-2 shadow-sm ${mine ? 'bg-brand-600 rounded-t-2xl rounded-bl-2xl rounded-br-md' : 'bg-white border border-ink-200 rounded-t-2xl rounded-br-2xl rounded-bl-md'}`}>
+                  <View key={item.id || item.clientMessageId || `${item.responderType}-${index}`} className={`flex-row ${mine ? 'justify-end' : 'justify-start'}`}>
+                    <Pressable
+                      disabled={!item.failed}
+                      onPress={() => (item.failed ? void retryMessage(item) : undefined)}
+                      className={`px-3 py-2 shadow-sm ${mine ? 'bg-brand-600 rounded-t-2xl rounded-bl-2xl rounded-br-md' : 'bg-white border border-ink-200 rounded-t-2xl rounded-br-2xl rounded-bl-md'} ${item.failed ? 'opacity-80' : ''}`}
+                      style={{ maxWidth: bubbleMaxWidth }}
+                    >
                       <Text className={`text-[13px] leading-5 ${mine ? 'text-white' : 'text-ink-900'}`}>{item.message}</Text>
                       <View className={`mt-1 flex-row items-center gap-1 ${mine ? 'self-end' : 'self-start'}`}>
                         <Text className={`text-[9.5px] ${mine ? 'text-white/70' : 'text-ink-400'}`}>{ticketDate(item.createdAt)}</Text>
-                        {mine && <Icon name="check-check" size={11} color="rgba(255,255,255,0.72)" />}
+                        {mine && item.pending && <Icon name="clock" size={11} color="rgba(255,255,255,0.72)" />}
+                        {mine && item.failed && <Text className="text-[9.5px] text-rose-100">Failed · tap to retry</Text>}
+                        {mine && !item.pending && !item.failed && (
+                          <Icon name={item.readAt ? 'check-check' : 'check'} size={11} color="rgba(255,255,255,0.72)" />
+                        )}
                       </View>
-                    </View>
+                    </Pressable>
                   </View>
                 );
               })}
             </ScrollView>
             <View
-              className="px-3 pt-2 border-t border-ink-200 bg-white"
+              className="pt-2 border-t border-ink-200 bg-white"
               style={{
+                paddingHorizontal: layout.gutter,
                 marginBottom: keyboardBottomInset + composerKeyboardGap,
                 paddingBottom: keyboardVisible ? 6 : Math.max(insets.bottom, 12),
+                paddingLeft: Math.max(layout.gutter, insets.left || 0),
+                paddingRight: Math.max(layout.gutter, insets.right || 0),
               }}
             >
-              {ticketClosed && <Text className="text-center text-[11px] text-ink-500 mb-2">This ticket is closed.</Text>}
+              {ticketClosed ? (
+                <View className="mb-2 gap-2">
+                  <Text className="text-center text-[11px] text-ink-500">This chat is closed.</Text>
+                  <Btn variant="outline" size="sm" disabled={statusBusy} onPress={reopenChat}>
+                    {statusBusy ? 'Reopening...' : 'Reopen chat'}
+                  </Btn>
+                </View>
+              ) : (
+                <View className="mb-2 flex-row justify-end">
+                  <Pressable onPress={closeChat} disabled={statusBusy} className="px-2 py-1">
+                    <Text className="text-[11px] font-semibold text-ink-500">{statusBusy ? 'Closing...' : 'Close chat'}</Text>
+                  </Pressable>
+                </View>
+              )}
               <View className="flex-row items-end gap-2">
                 <View className="flex-1 min-h-11 max-h-28 px-4 py-2 rounded-3xl bg-ink-100 justify-center">
                   <TextInput
                     value={reply}
                     onChangeText={setReply}
-                    placeholder={ticketClosed ? 'Ticket closed' : 'Message support...'}
+                    placeholder={ticketClosed ? 'Chat closed' : 'Message support...'}
                     placeholderTextColor="#94A3B8"
                     editable={!ticketClosed && !replying}
                     multiline
+                    blurOnSubmit={false}
+                    onSubmitEditing={() => {
+                      if (Platform.OS === 'web' || !reply.includes('\n')) void submitReply();
+                    }}
                     className="text-[14px] text-ink-900"
                     style={{ minHeight: 24, maxHeight: 88, textAlignVertical: 'top', ...androidInputStyle(14) }}
                   />
@@ -1553,8 +1917,8 @@ export function SupportTicketChatScreen() {
           </>
         ) : (
           <View className="m-4 p-4 rounded-card border border-ink-200 bg-white items-center">
-            <Text className="text-[13px] font-semibold text-ink-700">Ticket not found</Text>
-            <Text className="text-[11px] text-ink-500 mt-1">Please open the ticket again from history.</Text>
+            <Text className="text-[13px] font-semibold text-ink-700">Chat not found</Text>
+            <Text className="text-[11px] text-ink-500 mt-1">Please open the chat again from Customer Support.</Text>
           </View>
         )}
       </KeyboardAvoidingView>
@@ -1573,27 +1937,28 @@ export function CoachMarksScreen({
 }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const gutter = width < 360 ? 12 : 16;
   const steps = [
     {
       id: 'search' as const,
       icon: 'search',
       title: 'Search anything',
       body: 'Find properties by city, area, builder, or property type.',
-      fallback: { top: insets.top + 58, left: 16, width: width - 32, height: 48 },
+      fallback: { top: insets.top + 58, left: gutter, width: width - gutter * 2, height: 48 },
     },
     {
       id: 'actions' as const,
       icon: 'home',
       title: 'Buy or sell fast',
       body: 'Use the Buy and Sell cards to start the right journey in seconds.',
-      fallback: { top: insets.top + 120, left: 16, width: width - 32, height: 100 },
+      fallback: { top: insets.top + 120, left: gutter, width: width - gutter * 2, height: 100 },
     },
     {
       id: 'favorite' as const,
       icon: 'heart',
       title: 'Save favourites',
       body: 'Tap the heart on listings you like and revisit them from Saved Properties.',
-      fallback: { top: insets.top + 370, left: Math.min(width - 64, 220), width: 40, height: 40 },
+      fallback: { top: insets.top + 370, left: Math.min(width - 64, Math.max(gutter, width * 0.62)), width: 40, height: 40 },
     },
     {
       id: 'nav' as const,
@@ -1659,13 +2024,13 @@ export function CoachMarksScreen({
         </View>
 
         <View
-          className="absolute left-5 right-5 bg-white rounded-[28px] p-5 border border-white/40"
-          style={{ top: cardTop }}
+          className="absolute left-4 right-4 bg-white rounded-[28px] p-5 border border-white/40"
+          style={{ top: cardTop, maxWidth: Math.min(width - 32, 520), alignSelf: 'center' }}
         >
-          <View className="flex-row items-center justify-between mb-4">
-            <View>
+          <View className="flex-row items-start justify-between gap-3 mb-4">
+            <View className="flex-1 min-w-0">
               <Text className="text-[11px] font-bold text-brand-600 uppercase tracking-wider">Customer guide</Text>
-              <Text className="text-[18px] font-bold text-ink-900 mt-0.5">How Builtglory works</Text>
+              <Text className="text-[18px] font-bold text-ink-900 mt-0.5" numberOfLines={2}>How Builtglory works</Text>
             </View>
             <View className="px-2.5 py-1 bg-brand-600 rounded-full">
               <Text className="text-white text-[10px] font-bold">{i + 1}/{steps.length}</Text>
@@ -1685,11 +2050,11 @@ export function CoachMarksScreen({
             ))}
           </View>
 
-          <View className="mt-5 flex-row items-center gap-2">
+          <View className="mt-5 flex-row flex-wrap items-center gap-2">
             <Pressable onPress={onDone} className="h-10 px-3 rounded-card items-center justify-center">
               <Text className="text-ink-500 text-[13px] font-medium">Skip</Text>
             </Pressable>
-            <View className="flex-1" />
+            <View className="flex-1 min-w-2" />
             {i > 0 && (
               <Btn variant="outline" size="sm" onPress={() => setI(i - 1)} icon="arrow-left">
                 Back

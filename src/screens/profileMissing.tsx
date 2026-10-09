@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, ScrollView } from 'react-native';
 import Icon from '../components/Icon';
-import { Screen, TopBar, Field, Input, Btn, Badge, Chip, PhotoPlaceholder, FadeInView, EmptyState } from '../components/shared';
+import { Screen, TopBar, Field, Input, Btn, Badge, Chip, PhotoPlaceholder, FadeInView, EmptyState, PageBody } from '../components/shared';
 import { formatINR } from '../data/data';
 import { useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
@@ -148,7 +148,7 @@ export function ChangePhoneScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title={step === 'new' ? 'Change Phone Number' : 'Verify Phone'} />
-      <View className="px-4">
+      <PageBody>
         {step === 'new' ? (
           <>
             <Text className="text-[16px] font-semibold mb-1 mt-2">Enter new phone number</Text>
@@ -167,7 +167,7 @@ export function ChangePhoneScreen() {
             <Pressable onPress={sendOtp} disabled={loading || timer > 0} className="w-full mt-3 items-center"><Text className={`text-[13px] font-medium ${timer > 0 ? 'text-ink-400' : 'text-brand-600'}`}>{timer > 0 ? `Resend in ${timer}s` : 'Resend code'}</Text></Pressable>
           </>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -225,7 +225,7 @@ export function MyListingsScreen() {
       <TopBar onBack={back} title="My Listings" sub={`${listings.length} total`} right={
         <Pressable onPress={() => go('sellTypes')} className="w-9 h-9 rounded-full bg-brand-600 items-center justify-center"><Icon name="plus" size={16} color="white" /></Pressable>
       } />
-      <View className="px-4">
+      <PageBody>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }} className="mb-3">
           {['all', 'active', 'sold', 'withdrawn'].map((t) => (
             <Chip key={t} active={tab === t} onPress={() => setTab(t)}>{t === 'all' ? 'All' : t[0].toUpperCase() + t.slice(1)}</Chip>
@@ -252,7 +252,7 @@ export function MyListingsScreen() {
             </FadeInView>
           ))}
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -307,7 +307,7 @@ export function MyEnquiriesConsolidatedScreen() {
   return (
     <Screen refreshing={refreshing} onRefresh={() => loadEnquiries({ force: true })}>
       <TopBar onBack={back} title="My Enquiries" sub={`${enquiries.length} total`} />
-      <View className="px-4">
+      <PageBody>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }} className="mb-3">
           {['all', 'active', 'responded', 'visit_scheduled', 'negotiating', 'closed'].map((t) => (
             <Chip key={t} active={tab === t} onPress={() => setTab(t)}>{t === 'all' ? 'All' : enquiryStatusLabel(t)}</Chip>
@@ -330,7 +330,7 @@ export function MyEnquiriesConsolidatedScreen() {
             </Pressable>
           ))}
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }

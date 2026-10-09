@@ -3,7 +3,10 @@ import { Animated, Easing, View, Text } from 'react-native';
 import Icon from '../components/Icon';
 import { lineHeightFor } from '../setup/androidText';
 
+import { useLayout } from '../layout/breakpoints';
+
 export function NotificationHero({ unreadCount }: { unreadCount: number }) {
+  const layout = useLayout();
   const entry = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
   const badgeScale = useRef(new Animated.Value(unreadCount > 0 ? 0.6 : 1)).current;
@@ -42,7 +45,7 @@ export function NotificationHero({ unreadCount }: { unreadCount: number }) {
   const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.22, 0.05] });
 
   return (
-    <Animated.View style={{ opacity, transform: [{ translateY }] }} className="mx-4 mb-4">
+    <Animated.View style={{ opacity, transform: [{ translateY }], marginHorizontal: layout.gutter, marginBottom: 16 }}>
       <View className="overflow-hidden rounded-3xl border border-brand-100 bg-brand-50">
         <View className="absolute -right-8 -top-10 w-36 h-36 rounded-full bg-brand-200/30" />
         <View className="absolute -left-6 bottom-0 w-28 h-28 rounded-full bg-white/50" />
@@ -64,7 +67,7 @@ export function NotificationHero({ unreadCount }: { unreadCount: number }) {
               </Animated.View>
             ) : null}
           </View>
-          <View className="flex-1">
+          <View className="flex-1 min-w-0">
             <Text className="text-[17px] font-bold text-ink-900" style={{ lineHeight: lineHeightFor(17) }}>
               Stay in the loop
             </Text>

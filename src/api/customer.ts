@@ -134,12 +134,14 @@ export async function customerApiRequest<T>(path: string, options: RequestOption
 
   const url = `${CUSTOMER_API_BASE_URL}${path}`;
   const method = options.method ?? 'GET';
-  console.log('[BuiltGlory API] request', {
-    url,
-    method,
-    body: options.body ?? null,
-    hasAuth: Boolean(options.accessToken),
-  });
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log('[BuiltGlory API] request', {
+      url,
+      method,
+      body: options.body ?? null,
+      hasAuth: Boolean(options.accessToken),
+    });
+  }
 
   const response = await fetch(url, {
     method,
@@ -168,14 +170,15 @@ export async function customerApiRequest<T>(path: string, options: RequestOption
     throw readApiError(response, payload, rawText);
   }
 
-  console.log('[BuiltGlory API] response', {
-    url,
-    method,
-    status: response.status,
-    body: payload,
-  });
-
   if (!payload) return null as T;
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    console.log('[BuiltGlory API] response', {
+      url,
+      method,
+      status: response.status,
+      body: payload,
+    });
+  }
   return (payload as ApiEnvelope<T>).data;
 }
 
@@ -361,6 +364,7 @@ export type PublicAppConfig = {
   support?: {
     supportPhone?: string;
     supportPhoneE164?: string;
+    supportEmail?: string;
     whatsappNumber?: string;
     whatsappUrl?: string;
     telUrl?: string;
@@ -613,6 +617,8 @@ export type CustomerProperty = {
     facing?: string;
     age?: string;
     furnishing?: string;
+    bathrooms?: number;
+    washrooms?: number;
     parking?: string;
     reraNumber?: string;
     possession?: string;
@@ -625,8 +631,10 @@ export type CustomerProperty = {
     coverPhoto?: string;
     videoUrl?: string;
     droneImageUrl?: string;
+    droneVideoUrl?: string;
     tour3dUrl?: string;
     floorPlanUrl?: string;
+    floorPlanUrls?: string[];
   };
   metrics?: {
     savedCount?: number;
@@ -669,6 +677,8 @@ export type ListCustomerPropertiesParams = {
   constructionStatus?: string;
   postedBy?: string;
   verified?: boolean;
+  negotiable?: boolean;
+  recentlySold?: boolean;
   featured?: boolean;
   upcoming?: boolean;
   search?: string;
@@ -741,7 +751,7 @@ export async function uploadCustomerDocument(
   accessToken: string,
   data: {
     file: { uri: string; name: string; type: string };
-    ownerType: 'user' | 'sell_request' | 'support_ticket' | 'sales_deal';
+    ownerType: 'user' | 'sell_request' | 'support_ticket' | 'sales_deal' | 'payment';
     ownerId: string;
     purpose: 'kyc' | 'legal' | 'property_media' | 'payment_proof' | 'support_attachment';
     documentType?: string;
@@ -801,6 +811,11 @@ export type SupportTicket = {
   message?: string;
   status?: string;
   priority?: string;
+  channel?: 'ticket' | 'live_chat' | string;
+  lastMessage?: string;
+  lastMessageAt?: string;
+  unreadCustomerCount?: number;
+  unreadAgentCount?: number;
   createdAt?: string;
   updatedAt?: string;
   responses?: SupportTicketResponse[];
@@ -810,8 +825,10 @@ export type SupportTicketResponse = {
   _id?: string;
   id?: string;
   message?: string;
-  responderType?: 'admin' | 'customer' | string;
+  responderType?: 'admin' | 'customer' | 'system' | string;
   responderId?: string;
+  clientMessageId?: string;
+  readAt?: string;
   createdAt?: string;
 };
 
@@ -820,6 +837,15 @@ export type CreateSupportTicketInput = {
   subject: string;
   message: string;
   priority?: 'low' | 'medium' | 'high' | 'urgent';
+  channel?: 'ticket' | 'live_chat';
+  attachments?: string[];
+};
+
+export type StartLiveChatInput = {
+  category?: CreateSupportTicketInput['category'];
+  subject?: string;
+  message?: string;
+  priority?: CreateSupportTicketInput['priority'];
   attachments?: string[];
 };
 
@@ -831,9 +857,26 @@ export async function createSupportTicket(accessToken: string, data: CreateSuppo
   });
 }
 
-export async function listSupportTickets(accessToken: string, params: { page?: number; limit?: number; sort?: 'newest' | 'oldest' } = {}) {
+export async function listSupportTickets(
+  accessToken: string,
+  params: { page?: number; limit?: number; sort?: 'newest' | 'oldest'; status?: string; channel?: string } = {},
+) {
   return customerApiRequest<SupportTicket[]>(`/me/support/tickets${buildQuery(params)}`, {
     accessToken,
+  });
+}
+
+export async function getActiveLiveChat(accessToken: string) {
+  return customerApiRequest<SupportTicket | null>('/me/support/live-chat', {
+    accessToken,
+  });
+}
+
+export async function startLiveChat(accessToken: string, data: StartLiveChatInput = {}) {
+  return customerApiRequest<SupportTicket>('/me/support/live-chat', {
+    method: 'POST',
+    accessToken,
+    body: data,
   });
 }
 
@@ -843,11 +886,37 @@ export async function getSupportTicket(accessToken: string, ticketId: string) {
   });
 }
 
-export async function addSupportTicketResponse(accessToken: string, ticketId: string, message: string) {
+export async function addSupportTicketResponse(
+  accessToken: string,
+  ticketId: string,
+  message: string,
+  clientMessageId?: string,
+) {
   return customerApiRequest<SupportTicket>(`/me/support/tickets/${encodeURIComponent(ticketId)}/responses`, {
     method: 'POST',
     accessToken,
-    body: { message },
+    body: { message, ...(clientMessageId ? { clientMessageId } : {}) },
+  });
+}
+
+export async function markSupportTicketRead(accessToken: string, ticketId: string) {
+  return customerApiRequest<SupportTicket>(`/me/support/tickets/${encodeURIComponent(ticketId)}/read`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function closeSupportTicket(accessToken: string, ticketId: string) {
+  return customerApiRequest<SupportTicket>(`/me/support/tickets/${encodeURIComponent(ticketId)}/close`, {
+    method: 'POST',
+    accessToken,
+  });
+}
+
+export async function reopenSupportTicket(accessToken: string, ticketId: string) {
+  return customerApiRequest<SupportTicket>(`/me/support/tickets/${encodeURIComponent(ticketId)}/reopen`, {
+    method: 'POST',
+    accessToken,
   });
 }
 
@@ -1011,6 +1080,10 @@ export type CreateTokenPaymentInput = {
   type?: 'token';
   amount: number;
   currency?: 'INR';
+  method?: 'bank' | 'upi' | 'cheque' | 'cash';
+  transactionReference?: string;
+  proofDocumentId?: string;
+  notes?: string;
   idempotencyKey?: string;
 };
 
@@ -1024,9 +1097,17 @@ export type CustomerPayment = {
   amount?: number;
   currency?: string;
   status?: string;
+  method?: string;
   gateway?: string;
   gatewayOrderId?: string;
+  transactionReference?: string;
+  proofDocumentId?: string;
+  proofUrl?: string;
+  notes?: string;
   failureReason?: string;
+  verificationNotes?: string;
+  verifiedAt?: string;
+  submittedAt?: string;
   paidAt?: string;
   createdAt?: string;
 };
@@ -1036,6 +1117,13 @@ export async function createTokenPayment(accessToken: string, data: CreateTokenP
     method: 'POST',
     accessToken,
     body: data,
+  });
+}
+
+export async function cancelTokenPayment(accessToken: string, paymentId: string) {
+  return customerApiRequest<CustomerPayment>(`/payments/${paymentId}/cancel`, {
+    method: 'POST',
+    accessToken,
   });
 }
 
@@ -1223,7 +1311,7 @@ export type SellRequestInput = {
   ownershipType?: string;
   possessionStatus?: string;
   loanOnProperty?: boolean;
-  loanDetails?: Record<string, unknown>;
+  loanDetails?: Record<string, unknown> | null;
   description?: string | null;
   photos?: string[];
   documents?: SellRequestDocument[];

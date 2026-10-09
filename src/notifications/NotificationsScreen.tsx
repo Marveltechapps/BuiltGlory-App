@@ -8,7 +8,8 @@ import {
   View,
 } from 'react-native';
 import Icon from '../components/Icon';
-import { EmptyState, Input, Screen, TopBar } from '../components/shared';
+import { EmptyState, Input, Screen, TopBar, PageBody } from '../components/shared';
+import { useLayout } from '../layout/breakpoints';
 import { EmptyStateCard, ErrorCard, OfflineCard } from '../components/screenStates';
 import { useNav } from '../navigation/useNav';
 import { navigateFromNotification } from '../navigation/navigationRef';
@@ -49,6 +50,7 @@ function apiMessage(error: unknown, fallback: string) {
 
 export function NotificationsScreen() {
   const { back } = useNav();
+  const layout = useLayout();
   const { authToken, getCachedValue, setCachedValue, clearCachedValue } = useAppState();
   const [notifications, setNotifications] = useState<CustomerNotification[]>([]);
   const [locallyRead, setLocallyRead] = useState<Set<string>>(new Set());
@@ -197,19 +199,19 @@ export function NotificationsScreen() {
     <View>
       <NotificationHero unreadCount={unreadCount} />
 
-      <View className="px-4 mb-3">
+      <PageBody className="mb-3">
         <Input
           icon="search"
           placeholder="Search notifications"
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
-      </View>
+      </PageBody>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 12 }}
+        contentContainerStyle={{ paddingHorizontal: layout.gutter, paddingBottom: 12 }}
       >
         {NOTIFICATION_FILTERS.map((filter) => {
           const selected = activeFilter === filter.key;
@@ -238,8 +240,8 @@ export function NotificationsScreen() {
         })}
       </ScrollView>
 
-      {offline ? <View className="px-4 mb-3"><OfflineCard onRetry={() => loadNotifications(true)} /></View> : null}
-      {!!error && !offline ? <View className="px-4 mb-3"><ErrorCard message={error} onRetry={() => loadNotifications(true)} /></View> : null}
+      {offline ? <PageBody className="mb-3"><OfflineCard onRetry={() => loadNotifications(true)} /></PageBody> : null}
+      {!!error && !offline ? <PageBody className="mb-3"><ErrorCard message={error} onRetry={() => loadNotifications(true)} /></PageBody> : null}
       {showSkeleton ? <NotificationSkeletonList /> : null}
       {showEmpty ? (
         <EmptyState
@@ -249,13 +251,13 @@ export function NotificationsScreen() {
         />
       ) : null}
       {showFilteredEmpty ? (
-        <View className="px-4">
+        <PageBody>
           <EmptyStateCard
             icon="search"
             title="No matching notifications"
             body="Try a different search term or filter to see more updates."
           />
-        </View>
+        </PageBody>
       ) : null}
     </View>
   );
@@ -307,7 +309,7 @@ export function NotificationsScreen() {
           const unread = item.unread && !locallyRead.has(item.id);
           const isLast = index === section.data.length - 1;
           return (
-            <View className="px-4">
+            <PageBody>
               <NotificationSwipeRow
                 notification={item}
                 unread={unread}
@@ -316,7 +318,7 @@ export function NotificationsScreen() {
                 onMarkRead={() => markNotificationRead(item)}
                 onDelete={() => removeNotification(item.id)}
               />
-            </View>
+            </PageBody>
           );
         }}
         ListEmptyComponent={showSkeleton || showEmpty || showFilteredEmpty ? <View /> : null}

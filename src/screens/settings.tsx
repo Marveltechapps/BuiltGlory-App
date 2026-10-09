@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from '../components/Icon';
-import { Screen, TopBar, Field, Input, Toggle, Btn, UserAvatar } from '../components/shared';
+import { Screen, TopBar, Field, Input, Toggle, Btn, PageBody } from '../components/shared';
 import { useNav } from '../navigation/useNav';
 import { useAppState } from '../state/AppState';
 import { fallbackFaqContent, useContentSection, useFaqTopics } from '../content';
+import { gridItemWidth, useLayout } from '../layout/breakpoints';
 import {
+  COMPANY_SUPPORT_EMAIL,
   COMPANY_SUPPORT_PHONE_DISPLAY,
   openCompanyCall,
+  openCompanySupportEmail,
   openCompanyWhatsApp,
 } from '../config/companyContact';
 import {
@@ -19,6 +22,7 @@ import {
   CustomerApiError,
   CustomerProfile,
   getAccountDeletionStatus,
+  getActiveLiveChat,
   listSupportTickets,
   requestAccountDeletion,
   SupportTicket,
@@ -27,6 +31,8 @@ import {
 type NotificationChannel = 'sms' | 'whatsapp' | 'email' | 'push' | 'in_app';
 type NotificationPrefs = Record<NotificationChannel, { transactional: boolean; marketing: boolean }>;
 type AppPreferences = { language: 'English' | 'Tamil'; darkMode: boolean; locationMode: 'gps' | 'manual' };
+
+const APP_SETTINGS_KEY = 'builtglory.appSettings';
 
 const defaultNotificationPrefs: NotificationPrefs = {
   sms: { transactional: true, marketing: false },
@@ -56,6 +62,11 @@ function profilePhone(user: CustomerProfile | null) {
 
 function profileEmail(user: CustomerProfile | null) {
   return user?.email || 'Email not added';
+}
+
+function profileUserId(user: CustomerProfile | null) {
+  const id = user?._id || user?.id || user?.referenceId;
+  return id ? String(id) : '';
 }
 
 function prefsFromUser(user: CustomerProfile | null): NotificationPrefs {
@@ -104,63 +115,31 @@ function TicketStatus({ status }: { status?: string }) {
 // ─── A-01 Settings Main ──────────────────────────────────────
 export function SettingsMainScreen() {
   const { go, back } = useNav();
-  const { currentUser, refreshCurrentUser } = useAppState();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const rows = [
     { icon: 'user', label: 'Edit Profile', sub: 'Name, photo, email', target: 'profileEdit' },
     { icon: 'bell', label: 'Notification Settings', sub: 'Choose what alerts you receive', target: 'notificationSettings' },
     { icon: 'smartphone', label: 'App Settings', sub: 'Language, theme, location', target: 'appSettings' },
     { icon: 'shield', label: 'Account Settings', sub: 'Password and account', target: 'accountSettings' },
   ];
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await refreshCurrentUser();
-    } catch (err) {
-      setError(apiMessage(err, 'Could not refresh account details.'));
-    } finally {
-      setLoading(false);
-    }
-  }, [refreshCurrentUser]);
-  useEffect(() => {
-    load();
-  }, [load]);
   return (
     <Screen>
       <TopBar onBack={back} title="Settings" />
-      <View className="px-4 gap-4">
-        <View className="p-4 rounded-card border border-brand-200 bg-brand-50 flex-row items-center gap-3">
-          <UserAvatar
-            imageUri={typeof currentUser?.profilePhoto === 'string' ? currentUser.profilePhoto : null}
-            label={profileName(currentUser)}
-            size={48}
-            bgClassName="bg-brand-600"
-          />
-          <View className="flex-1">
-            <Text className="text-[15px] font-bold text-ink-900">{profileName(currentUser)}</Text>
-            <Text className="text-[11.5px] text-ink-600 mt-0.5">{profilePhone(currentUser)}</Text>
-            <Text className="text-[11px] text-ink-500">{profileEmail(currentUser)}</Text>
-          </View>
-          {loading && <ActivityIndicator color="#1A6FFF" />}
-        </View>
-        {error && <InlineError message={error} onRetry={load} />}
+      <PageBody className="gap-4">
         <View className="rounded-card border border-ink-200">
           {rows.map((r, i) => (
             <Pressable key={r.label} onPress={() => go(r.target)} className={`flex-row items-center gap-3 p-4 ${i ? 'border-t border-ink-100' : ''}`}>
               <View className="w-10 h-10 rounded-full bg-ink-100 items-center justify-center"><Icon name={r.icon} size={18} color="#64748B" /></View>
-              <View className="flex-1"><Text className="text-[14px] font-semibold text-ink-900">{r.label}</Text><Text className="text-[11.5px] text-ink-500">{r.sub}</Text></View>
+              <View className="flex-1 min-w-0"><Text className="text-[14px] font-semibold text-ink-900">{r.label}</Text><Text className="text-[11.5px] text-ink-500">{r.sub}</Text></View>
               <Icon name="chevron-right" size={16} color="#94A3B8" />
             </Pressable>
           ))}
         </View>
         <Pressable onPress={() => go('helpFaqs')} className="w-full flex-row items-center gap-3 p-4 rounded-card border border-brand-200 bg-brand-50">
           <View className="w-10 h-10 rounded-full bg-brand-600 items-center justify-center"><Icon name="circle-help" size={18} color="white" /></View>
-          <View className="flex-1"><Text className="text-[14px] font-semibold text-brand-700">Help & Support</Text><Text className="text-[11.5px] text-brand-600">FAQs and customer support</Text></View>
+          <View className="flex-1 min-w-0"><Text className="text-[14px] font-semibold text-brand-700">Help & Support</Text><Text className="text-[11.5px] text-brand-600">FAQs and customer support</Text></View>
           <Icon name="chevron-right" size={16} color="#1A6FFF" />
         </Pressable>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -215,7 +194,7 @@ export function NotificationSettingsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Notification Settings" />
-      <View className="px-4 gap-3">
+      <PageBody className="gap-3">
         {loading && <LoadingBlock label="Loading notification preferences..." />}
         {error && <InlineError message={error} onRetry={load} />}
         {saved && !saving && <View className="p-3 rounded-card bg-emerald-50 border border-emerald-200"><Text className="text-[12px] text-emerald-700">Preferences saved.</Text></View>}
@@ -237,7 +216,7 @@ export function NotificationSettingsScreen() {
             </View>
           ))}
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -265,7 +244,7 @@ export function AppSettingsScreen() {
   return (
     <Screen dark={dark}>
       <TopBar onBack={back} title="App Settings" dark={dark} />
-      <View className="px-4 gap-5">
+      <PageBody className="gap-5">
         {saved && <View className="p-3 rounded-card bg-emerald-50 border border-emerald-200"><Text className="text-[12px] text-emerald-700">App preferences saved on this device.</Text></View>}
         <View>
           <Text className={`text-[12px] font-semibold uppercase tracking-wider mb-2 ${dark ? 'text-white/50' : 'text-ink-500'}`}>Language</Text>
@@ -296,14 +275,14 @@ export function AppSettingsScreen() {
             ))}
           </View>
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
 
 // ─── A-04 Account Settings ───────────────────────────────────
 export function AccountSettingsScreen() {
-  const { go, back } = useNav();
+  const { go, back, resetTo } = useNav();
   const { currentUser, signOut } = useAppState();
   const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -312,7 +291,7 @@ export function AccountSettingsScreen() {
     setError(null);
     try {
       await signOut();
-      go('splash');
+      resetTo('login');
     } catch (err) {
       setError(apiMessage(err, 'Could not sign out. Please try again.'));
     } finally {
@@ -322,7 +301,7 @@ export function AccountSettingsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Account Settings" />
-      <View className="px-4 gap-4">
+      <PageBody className="gap-4">
         <View className="rounded-card border border-ink-200 p-4">
           <Text className="text-[14px] font-bold text-ink-900">Signed in account</Text>
           <Text className="text-[12px] text-ink-600 mt-2">{profileName(currentUser)}</Text>
@@ -342,7 +321,7 @@ export function AccountSettingsScreen() {
             <Icon name="trash-2" size={15} color="#E11D48" /><Text className="text-[13px] text-rose-600 font-medium">Delete Account</Text>
           </Pressable>
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -410,7 +389,7 @@ export function AccountDeletionScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Delete Account" />
-      <View className="px-4">
+      <PageBody>
         <View className="rounded-card border border-rose-200 bg-rose-50/50 p-4 mb-4">
           <View className="flex-row items-center gap-2 mb-2"><Icon name="triangle-alert" size={18} color="#E11D48" /><Text className="text-[14px] font-bold text-rose-800">This cannot be undone</Text></View>
           <Text className="text-[12px] text-rose-700 mb-2">Requesting deletion starts backend tracking, support verification, and a grace period before final anonymization.</Text>
@@ -440,10 +419,10 @@ export function AccountDeletionScreen() {
         <Field label="Reason (optional)"><Input value={reason} onChangeText={setReason} placeholder="Tell us why you are leaving" multiline /></Field>
         <Field label="Type DELETE to confirm"><Input value={typed} onChangeText={setTyped} placeholder="DELETE" /></Field>
         <Pressable onPress={submit} disabled={!enabled || !authToken || saving || activeRequest} className={`w-full min-h-12 py-3 mt-5 rounded-xl items-center justify-center ${enabled && authToken && !saving && !activeRequest ? 'bg-rose-600' : 'bg-rose-200'}`}>
-          <Text className="text-white font-semibold text-[15px]">{saving ? 'Submitting...' : activeRequest ? 'Deletion Already Requested' : 'Request Account Deletion'}</Text>
+          <Text className="text-white font-semibold text-[15px] text-center px-2">{saving ? 'Submitting...' : activeRequest ? 'Deletion Already Requested' : 'Request Account Deletion'}</Text>
         </Pressable>
         <Pressable onPress={back} className="w-full min-h-12 py-3 mt-2 rounded-xl items-center justify-center bg-ink-100"><Text className="text-ink-700 font-semibold text-[15px]">Keep My Account</Text></Pressable>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -451,6 +430,10 @@ export function AccountDeletionScreen() {
 // ─── A-05 Help & FAQs ────────────────────────────────────────
 export function HelpFaqsScreen() {
   const { go, back } = useNav();
+  const layout = useLayout();
+  const faqCols = layout.isTablet ? 3 : 2;
+  const faqGap = layout.gap;
+  const faqW = gridItemWidth(layout.contentWidth - layout.gutter * 2, faqCols, faqGap);
   const [q, setQ] = useState('');
   const { items: faqs, loading, error, reload } = useContentSection('faq', fallbackFaqContent);
   const topics = useFaqTopics(faqs);
@@ -458,7 +441,7 @@ export function HelpFaqsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Help & FAQs" />
-      <View className="px-4">
+      <PageBody>
         <Input icon="search" placeholder="Search help articles" value={q} onChangeText={setQ} />
         {loading && <Text className="mt-3 text-[12px] text-ink-500">Loading help content...</Text>}
         {!!error && (
@@ -479,11 +462,11 @@ export function HelpFaqsScreen() {
           </View>
         ) : (
           <>
-            <View className="flex-row flex-wrap gap-2.5 mt-4">
+            <View className="flex-row flex-wrap mt-4" style={{ gap: faqGap }}>
               {topics.map((t) => (
-                <Pressable key={t.id} onPress={() => go('faqTopic', { topic: t })} style={{ width: '47%' }} className="p-3.5 rounded-card border border-ink-200 flex-row items-center gap-3">
+                <Pressable key={t.id} onPress={() => go('faqTopic', { topic: t })} style={{ width: faqW }} className="p-3.5 rounded-card border border-ink-200 flex-row items-center gap-3 min-h-[72px]">
                   <View className="w-10 h-10 rounded-xl bg-brand-50 items-center justify-center"><Icon name={t.icon} size={18} color="#1A6FFF" /></View>
-                  <View className="flex-1"><Text className="text-[13px] font-semibold" numberOfLines={1}>{t.label}</Text><Text className="text-[10.5px] text-ink-500">{t.count} articles</Text></View>
+                  <View className="flex-1 min-w-0"><Text className="text-[13px] font-semibold" numberOfLines={2}>{t.label}</Text><Text className="text-[10.5px] text-ink-500">{t.count} articles</Text></View>
                 </Pressable>
               ))}
             </View>
@@ -494,7 +477,7 @@ export function HelpFaqsScreen() {
             </Pressable>
           </>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -510,7 +493,7 @@ export function FaqTopicScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title={topic.label} sub="Frequently asked questions" />
-      <View className="px-4">
+      <PageBody>
         {loading && <Text className="mb-3 text-[12px] text-ink-500">Loading help content...</Text>}
         {!!error && (
           <Pressable onPress={reload} className="mb-3 p-3 rounded-card border border-amber-200 bg-amber-50">
@@ -529,14 +512,20 @@ export function FaqTopicScreen() {
           ))}
           {topicFaqs.length === 0 && <Text className="p-3.5 text-[12px] text-ink-500">No articles are published for this topic yet.</Text>}
         </View>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
 
+type CustomerSupportCtx = {
+  orderId?: string;
+  orderReferenceId?: string;
+  issueDescription?: string;
+};
+
 // ─── A-07 Customer Support ───────────────────────────────────
 export function CustomerSupportScreen() {
-  const { go, back } = useNav();
+  const { go, back, ctx } = useNav<CustomerSupportCtx>();
   const { authToken, currentUser } = useAppState();
   const [form, setForm] = useState({ name: profileName(currentUser), phone: profilePhone(currentUser).replace(/\D/g, '').slice(-10), slot: '' });
   const [ticket, setTicket] = useState({ category: 'general' as const, subject: '', message: '' });
@@ -544,14 +533,25 @@ export function CustomerSupportScreen() {
   const [loading, setLoading] = useState(false);
   const [submittingCallback, setSubmittingCallback] = useState(false);
   const [submittingTicket, setSubmittingTicket] = useState(false);
+  const [openingEmail, setOpeningEmail] = useState(false);
+  const [showCallbackForm, setShowCallbackForm] = useState(false);
+  const [showTicketForm, setShowTicketForm] = useState(false);
+  const [emailIssue, setEmailIssue] = useState(ctx.issueDescription || '');
   const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [liveUnread, setLiveUnread] = useState(0);
+  const orderId = String(ctx.orderId || ctx.orderReferenceId || '').trim();
   const loadTickets = useCallback(async () => {
     if (!authToken) return;
     setLoading(true);
     setError(null);
     try {
-      setTickets(await listSupportTickets(authToken, { limit: 5, sort: 'newest' }));
+      const [list, activeLive] = await Promise.all([
+        listSupportTickets(authToken, { limit: 5, sort: 'newest' }),
+        getActiveLiveChat(authToken).catch(() => null),
+      ]);
+      setTickets(list);
+      setLiveUnread(activeLive?.unreadCustomerCount || 0);
     } catch (err) {
       setError(apiMessage(err, 'Could not load support tickets.'));
     } finally {
@@ -579,6 +579,7 @@ export function CustomerSupportScreen() {
         bestTimePreference: form.slot.toLowerCase() as 'morning' | 'afternoon' | 'evening',
       });
       setSent("We'll call you in your chosen slot.");
+      setShowCallbackForm(false);
     } catch (err) {
       setError(apiMessage(err, 'Could not request callback.'));
     } finally {
@@ -595,7 +596,7 @@ export function CustomerSupportScreen() {
     setError(null);
     setSent(null);
     try {
-      await createSupportTicket(authToken, {
+      const created = await createSupportTicket(authToken, {
         category: ticket.category,
         subject: ticket.subject.trim(),
         message: ticket.message.trim(),
@@ -603,44 +604,103 @@ export function CustomerSupportScreen() {
       });
       setTicket({ category: 'general', subject: '', message: '' });
       setSent('Support ticket submitted.');
+      setShowTicketForm(false);
       await loadTickets();
+      if (created?._id || created?.id) {
+        go('supportTicketChat', { ticketId: String(created._id ?? created.id) });
+      }
     } catch (err) {
       setError(apiMessage(err, 'Could not submit support ticket.'));
     } finally {
       setSubmittingTicket(false);
     }
   };
+  const sendSupportEmail = async () => {
+    setOpeningEmail(true);
+    setError(null);
+    setSent(null);
+    try {
+      const opened = await openCompanySupportEmail({
+        userName: currentUser ? profileName(currentUser) : null,
+        userEmail: currentUser?.email || null,
+        userId: profileUserId(currentUser) || null,
+        orderId: orderId || null,
+        issueDescription: emailIssue.trim() || null,
+      });
+      if (!opened) {
+        setError(`No email app is installed on this device. Please email ${COMPANY_SUPPORT_EMAIL} instead.`);
+      }
+    } catch {
+      setError(`Could not open email. Please email ${COMPANY_SUPPORT_EMAIL} instead.`);
+    } finally {
+      setOpeningEmail(false);
+    }
+  };
   return (
     <Screen>
       <TopBar onBack={back} title="Customer Support" />
-      <View className="px-4 gap-3">
+      <PageBody className="gap-3">
         {sent && <View className="flex-row items-center gap-2 p-3 rounded-card bg-emerald-50 border border-emerald-200"><Icon name="check-circle" size={16} color="#10B981" /><Text className="text-[13px] text-emerald-700">{sent}</Text></View>}
         {error && <InlineError message={error} onRetry={loadTickets} />}
-        <View className="rounded-card border border-ink-200 p-4 mb-3">
-          <Text className="text-[14px] font-semibold mb-3">Request a Callback</Text>
-          <View className="gap-3">
-            <Field label="Name"><Input icon="user" value={form.name} onChangeText={(v) => setForm({ ...form, name: v })} /></Field>
-            <Field label="Phone"><Input icon="phone" prefix="+91" keyboardType="phone-pad" value={form.phone} onChangeText={(v) => setForm({ ...form, phone: v })} /></Field>
-            <Field label="Preferred time slot">
-              <View className="flex-row gap-2">
-                {['Morning', 'Afternoon', 'Evening'].map((s) => (
-                  <Pressable key={s} onPress={() => setForm({ ...form, slot: s })} className={`flex-1 min-h-10 py-2 rounded-card items-center justify-center ${form.slot === s ? 'bg-brand-600' : 'bg-ink-100'}`}>
-                    <Text className={`text-[12px] font-medium ${form.slot === s ? 'text-white' : 'text-ink-700'}`}>{s}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </Field>
-            <Btn className="w-full" disabled={!form.slot || submittingCallback} onPress={submitCallback}>{submittingCallback ? 'Requesting...' : 'Request Callback'}</Btn>
+
+        <Pressable onPress={() => go('liveChat')} className="w-full flex-row items-center gap-3 p-4 rounded-card border border-ink-200 bg-white">
+          <View className="flex-1">
+            <View className="flex-row items-center gap-2">
+              <Text className="text-[14px] font-semibold text-ink-900">Live Chat</Text>
+              {liveUnread > 0 ? (
+                <View className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 items-center justify-center">
+                  <Text className="text-white text-[10px] font-bold">{liveUnread > 99 ? '99+' : liveUnread}</Text>
+                </View>
+              ) : null}
+            </View>
+            <Text className="text-[12px] text-ink-500 mt-0.5">Typically replies in &lt; 2 hours</Text>
           </View>
-        </View>
-        <View className="rounded-card border border-ink-200 p-4">
-          <Text className="text-[14px] font-semibold mb-3">Raise a Support Ticket</Text>
-          <View className="gap-3">
-            <Field label="Subject" required><Input icon="message-circle" value={ticket.subject} onChangeText={(v) => setTicket({ ...ticket, subject: v })} placeholder="What do you need help with?" /></Field>
-            <Field label="Message" required><Input multiline value={ticket.message} onChangeText={(v) => setTicket({ ...ticket, message: v })} placeholder="Describe the issue or question" /></Field>
-            <Btn className="w-full" disabled={!ticket.subject.trim() || !ticket.message.trim() || submittingTicket} onPress={submitTicket}>{submittingTicket ? 'Submitting...' : 'Submit Ticket'}</Btn>
+          <Icon name="chevron-right" size={16} color="#94A3B8" />
+        </Pressable>
+
+        <Pressable onPress={() => setShowCallbackForm((v) => !v)} className="w-full flex-row items-center gap-3 p-4 rounded-card border border-ink-200 bg-white">
+          <View className="flex-1">
+            <Text className="text-[14px] font-semibold text-ink-900">Request a Callback</Text>
+            <Text className="text-[12px] text-ink-500 mt-0.5">We'll call you in your preferred slot</Text>
           </View>
-        </View>
+          <Icon name={showCallbackForm ? 'chevron-up' : 'chevron-right'} size={16} color="#94A3B8" />
+        </Pressable>
+        {showCallbackForm && (
+          <View className="rounded-card border border-ink-200 p-4 -mt-1">
+            <View className="gap-3">
+              <Field label="Name"><Input icon="user" value={form.name} onChangeText={(v) => setForm({ ...form, name: v })} /></Field>
+              <Field label="Phone"><Input icon="phone" prefix="+91" keyboardType="phone-pad" value={form.phone} onChangeText={(v) => setForm({ ...form, phone: v })} /></Field>
+              <Field label="Preferred time slot">
+                <View className="flex-row gap-2">
+                  {['Morning', 'Afternoon', 'Evening'].map((s) => (
+                    <Pressable key={s} onPress={() => setForm({ ...form, slot: s })} className={`flex-1 min-h-10 py-2 rounded-card items-center justify-center ${form.slot === s ? 'bg-brand-600' : 'bg-ink-100'}`}>
+                      <Text className={`text-[12px] font-medium ${form.slot === s ? 'text-white' : 'text-ink-700'}`}>{s}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </Field>
+              <Btn className="w-full" disabled={!form.slot || submittingCallback} onPress={submitCallback}>{submittingCallback ? 'Requesting...' : 'Request Callback'}</Btn>
+            </View>
+          </View>
+        )}
+
+        <Pressable onPress={() => setShowTicketForm((v) => !v)} className="w-full flex-row items-center gap-3 p-4 rounded-card border border-ink-200 bg-white">
+          <View className="flex-1">
+            <Text className="text-[14px] font-semibold text-ink-900">Raise a Support Ticket</Text>
+            <Text className="text-[12px] text-ink-500 mt-0.5">Tracked issue with full history</Text>
+          </View>
+          <Icon name={showTicketForm ? 'chevron-up' : 'chevron-right'} size={16} color="#94A3B8" />
+        </Pressable>
+        {showTicketForm && (
+          <View className="rounded-card border border-ink-200 p-4 -mt-1">
+            <View className="gap-3">
+              <Field label="Subject" required><Input icon="message-circle" value={ticket.subject} onChangeText={(v) => setTicket({ ...ticket, subject: v })} placeholder="What do you need help with?" /></Field>
+              <Field label="Message" required><Input multiline value={ticket.message} onChangeText={(v) => setTicket({ ...ticket, message: v })} placeholder="Describe the issue or question" /></Field>
+              <Btn className="w-full" disabled={!ticket.subject.trim() || !ticket.message.trim() || submittingTicket} onPress={submitTicket}>{submittingTicket ? 'Submitting...' : 'Submit Ticket'}</Btn>
+            </View>
+          </View>
+        )}
+
         <View className="rounded-card border border-ink-200 p-4">
           <View className="flex-row items-center justify-between mb-3">
             <Text className="text-[14px] font-semibold">Recent Tickets</Text>
@@ -653,13 +713,22 @@ export function CustomerSupportScreen() {
           ) : (
             <View className="gap-2">
               {tickets.map((item) => (
-                <View key={item._id ?? item.referenceId ?? item.subject} className="p-3 rounded-card bg-ink-50">
+                <Pressable
+                  key={item._id ?? item.referenceId ?? item.subject}
+                  onPress={() => go('supportTicketChat', { ticketId: String(item._id ?? item.id ?? '') })}
+                  className="p-3 rounded-card bg-ink-50"
+                >
                   <View className="flex-row items-center gap-2">
                     <Text className="flex-1 text-[12.5px] font-semibold text-ink-900" numberOfLines={1}>{item.subject || 'Support ticket'}</Text>
                     <TicketStatus status={item.status} />
+                    {(item.unreadCustomerCount || 0) > 0 ? (
+                      <View className="min-w-[16px] h-4 px-1 rounded-full bg-rose-500 items-center justify-center">
+                        <Text className="text-white text-[9px] font-bold">{item.unreadCustomerCount}</Text>
+                      </View>
+                    ) : null}
                   </View>
                   <Text className="text-[11px] text-ink-500 mt-1">{item.referenceId || 'Ticket'}{item.createdAt ? ` - ${new Date(item.createdAt).toLocaleDateString('en-IN')}` : ''}</Text>
-                </View>
+                </Pressable>
               ))}
             </View>
           )}
@@ -674,7 +743,37 @@ export function CustomerSupportScreen() {
           <View className="flex-1"><Text className="text-[14px] font-semibold text-emerald-800">WhatsApp Support</Text><Text className="text-[11.5px] text-emerald-700">Chat with BuiltGlory team</Text></View>
           <Icon name="chevron-right" size={16} color="#059669" />
         </Pressable>
-      </View>
+        <View className="w-full rounded-card border border-brand-200 bg-brand-50 p-4">
+          <View className="flex-row items-start gap-3">
+            <View className="w-11 h-11 rounded-full bg-brand-600 items-center justify-center">
+              <Icon name="mail" size={20} color="white" />
+            </View>
+            <View className="flex-1 min-w-0">
+              <Text className="text-[14px] font-semibold text-ink-900">Email Support</Text>
+              <Text className="text-[12px] text-ink-500 mt-0.5">Write to us and we'll reply within 24 hours</Text>
+            </View>
+          </View>
+          {!!orderId && (
+            <View className="mt-3 px-3 py-2 rounded-card bg-white border border-brand-200">
+              <Text className="text-[11px] text-ink-500">Order ID</Text>
+              <Text className="text-[12.5px] font-semibold text-ink-900 mt-0.5">{orderId}</Text>
+            </View>
+          )}
+          <View className="mt-3">
+            <Field label="Issue description">
+              <Input
+                multiline
+                value={emailIssue}
+                onChangeText={setEmailIssue}
+                placeholder="Optional — describe what you need help with"
+              />
+            </Field>
+          </View>
+          <Btn className="w-full mt-3" icon="mail" disabled={openingEmail} onPress={() => void sendSupportEmail()}>
+            {openingEmail ? 'Opening email...' : 'Send Email'}
+          </Btn>
+        </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -712,7 +811,7 @@ export function CallUsScreen() {
   return (
     <Screen>
       <TopBar onBack={back} title="Call Us" />
-      <View className="px-4">
+      <PageBody>
         <View className="rounded-card border border-ink-200 p-5 items-center mb-4">
           <View className="w-16 h-16 rounded-full bg-brand-50 items-center justify-center mb-3"><Icon name="phone-call" size={28} color="#1A6FFF" /></View>
           <Pressable onPress={() => void openCompanyCall()}><Text className="text-[22px] font-bold text-brand-600">{COMPANY_SUPPORT_PHONE_DISPLAY}</Text></Pressable>
@@ -740,7 +839,7 @@ export function CallUsScreen() {
         )}
         {open && <Btn className="w-full mt-4" variant="outline" onPress={() => go('customerSupport')}>Request Callback Instead</Btn>}
         {message && <View className="mt-4 p-3 rounded-card bg-ink-50"><Text className="text-[12px] text-ink-700">{message}</Text></View>}
-      </View>
+      </PageBody>
     </Screen>
   );
 }

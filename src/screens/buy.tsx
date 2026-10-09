@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Image, View, Text, Pressable, ScrollView, Linking, Share } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Image, View, Text, Pressable, ScrollView, Linking, Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import MapView, { Marker, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
 import { PropertyEmbedViewer } from '../components/PropertyEmbedViewer';
@@ -11,17 +12,24 @@ import {
   hasAerialContent,
   hasVirtualTour,
   isImageMediaUrl,
+  propertyFloorPlans,
   virtualTourUrl,
 } from '../utils/propertyMedia';
 import {
   Screen, TopBar, Field, Input, Chip, Badge, PropertyCard, PhotoPlaceholder,
-  Toast, useToast, Btn, Spinner, SuccessBurst, FadeInView, EmptyState, SkeletonCard,
+  Toast, useToast, Btn, Spinner, SuccessBurst, FadeInView, EmptyState, SkeletonCard, PageBody, Sheet,
 } from '../components/shared';
-import { PROPERTY_TYPES, SPECS, formatINR, Property } from '../data/data';
+import { PROPERTY_TYPES, SPECS, formatINR, formatPropertyTypeLabel, Property } from '../data/data';
 import { useAppState } from '../state/AppState';
 import { useFlowCompletionBack, useNav } from '../navigation/useNav';
 import { useBuyEnquiryResource, propertyIdFromEnquiry } from '../hooks/useBuyEnquiryResource';
 import { contentMetaArray, useContentItem } from '../content';
+import { gridItemWidth, useLayout } from '../layout/breakpoints';
+import {
+  advisorInitials,
+  DEFAULT_PROPERTY_ADVISOR,
+  openCompanyCall,
+} from '../config/companyContact';
 import { BUY_TYPE_COUNTS_CACHE_KEY, FAVORITES_LIST_CACHE_PREFIX, TYPE_TO_BACKEND, buildBuyTypeCounts, propertyMediaImages, toBackendType } from '../state/primaryTabCache';
 import {
   BuyEnquiry,
@@ -40,6 +48,11 @@ import {
   VisitAvailabilitySlot,
 } from '../api/customer';
 import { isNetworkError, resourceErrorMessage } from '../utils/apiErrors';
+import { requestLocationPermission } from '../utils/location';
+import { propertyShareUrl, sharePropertyNative } from '../config/appLinks';
+import { propertyAmenityLabels, propertyHighlightLabels, propertySpecRows } from '../utils/propertySpecs';
+
+const FLOOR_PLAN_ACCENTS = ['#34D399', '#FBBF24', '#F472B6', '#60A5FA', '#A78BFA'];
 
 type DisplayProperty = Property & { backend?: CustomerProperty };
 type PropertyTypeVisibilityConfig = {
@@ -104,6 +117,12 @@ function propertyCoordinates(property?: DisplayProperty | CustomerProperty | nul
   return { latitude, longitude };
 }
 
+function useGoogleMapUserLocation() {
+  useEffect(() => {
+    requestLocationPermission().catch(() => undefined);
+  }, []);
+}
+
 function hasText(value?: string | null) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -121,6 +140,15 @@ function hasAnyValue(values: unknown[]) {
 function openExternalUrl(url?: string | null) {
   if (!url) return Promise.reject(new Error('Missing URL'));
   return Linking.openURL(url);
+}
+
+function openDirections(coordinates: { latitude: number; longitude: number }, label?: string) {
+  const { latitude, longitude } = coordinates;
+  const destination = `${latitude},${longitude}`;
+  const encodedLabel = encodeURIComponent(label || 'Property');
+  const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&destination_place_id=&travelmode=driving`;
+  const appleUrl = `http://maps.apple.com/?daddr=${destination}&q=${encodedLabel}`;
+  return Linking.openURL(Platform.OS === 'ios' ? appleUrl : googleUrl);
 }
 
 function toIsoDate(date: Date) {
@@ -315,6 +343,11 @@ export function PropertyTypeGrid({
   surface?: 'buy' | 'sell';
 }) {
   const { item } = useContentItem('property-type-visibility-config', fallbackPropertyTypeVisibilityContent);
+  const layout = useLayout();
+  const columns = layout.typeColumns;
+  const gap = layout.gap;
+  const itemWidth = gridItemWidth(layout.contentWidth - layout.gutter * 2, columns, gap);
+  const tileHeight = layout.isTablet ? 118 : layout.isPhoneSm ? 96 : 100;
   const cmsTypes = contentMetaArray<PropertyTypeVisibilityConfig>(item, 'propertyTypes');
   const visibleTypes = cmsTypes.length
     ? cmsTypes
@@ -331,20 +364,20 @@ export function PropertyTypeGrid({
         })
     : PROPERTY_TYPES;
   return (
-    <View className="px-4">
-      <View className="flex-row flex-wrap gap-2.5">
+    <View style={{ paddingHorizontal: layout.gutter }}>
+      <View className="flex-row flex-wrap" style={{ gap }}>
         {visibleTypes.map((t) => (
           <Pressable
             key={t.id}
             onPress={() => onSelect(t.id)}
-            style={{ width: '31%', height: 100 }}
+            style={{ width: itemWidth, height: tileHeight }}
             className="rounded-card border border-ink-200 p-2 items-center justify-center gap-1"
           >
-            <View className="w-11 h-11 rounded-xl bg-brand-50 items-center justify-center">
-              <Icon name={t.icon} size={20} color={accentColor} />
+            <View className={`${layout.isTablet ? 'w-12 h-12' : 'w-11 h-11'} rounded-xl bg-brand-50 items-center justify-center`}>
+              <Icon name={t.icon} size={layout.isTablet ? 22 : 20} color={accentColor} />
             </View>
-            <Text className="text-[10.5px] font-semibold text-center leading-caption">{t.label}</Text>
-            <Text className="text-[9px] text-ink-500 leading-caption">{counts[t.id] ? `${counts[t.id]} live` : t.sub || 'Browse'}</Text>
+            <Text className={`${layout.isTablet ? 'text-[12px]' : 'text-[10.5px]'} font-semibold text-center leading-caption`} numberOfLines={2}>{t.label}</Text>
+            <Text className="text-[9px] text-ink-500 leading-caption" numberOfLines={1}>{counts[t.id] ? `${counts[t.id]} live` : t.sub || 'Browse'}</Text>
           </Pressable>
         ))}
       </View>
@@ -387,9 +420,9 @@ export function BuyTypeScreen() {
   return (
     <Screen padBottom>
       <TopBar title="Select Property Type" />
-      <View className="px-4 items-center mb-4">
+      <PageBody className="items-center mb-4">
         <Text className="text-[13px] text-ink-500">What are you looking for?</Text>
-      </View>
+      </PageBody>
       {error && <ErrorCard message={error} onRetry={loadTypeCounts} />}
       {loading && <LoadingBlock label="Checking live property availability..." />}
       <PropertyTypeGrid counts={counts} onSelect={(type) => go('buyList', { type })} />
@@ -400,25 +433,45 @@ export function BuyTypeScreen() {
 // ─── B-02 Filter Screen ──────────────────────────────────────
 export function FilterScreen() {
   const { go, back, ctx } = useNav();
-  const [bhk, setBHK] = useState<Set<any>>(new Set([2, 3]));
-  const [sort, setSort] = useState('relevance');
-  const [city, setCity] = useState(ctx?.city ?? 'Chennai');
+  const incoming = (ctx?.filters ?? {}) as Record<string, unknown>;
+  const [bhk, setBHK] = useState<Set<any>>(() => {
+    const raw = String(incoming.bhk || '');
+    return new Set(raw ? raw.split(',').map((item) => (Number(item) || item)) : []);
+  });
+  const [sort, setSort] = useState(ctx?.filters?.sort === 'price_asc' ? 'price-asc' : ctx?.filters?.sort === 'price_desc' ? 'price-desc' : ctx?.filters?.sort === 'newest' ? 'new' : 'relevance');
+  const [city, setCity] = useState(String(incoming.city || ctx?.city || ''));
+  const [minLakh, setMinLakh] = useState(incoming.minPrice ? String(Number(incoming.minPrice) / 100000) : '');
+  const [maxLakh, setMaxLakh] = useState(incoming.maxPrice ? String(Number(incoming.maxPrice) / 100000) : '');
+  const [minArea, setMinArea] = useState(incoming.minArea ? String(incoming.minArea) : '');
+  const [maxArea, setMaxArea] = useState(incoming.maxArea ? String(incoming.maxArea) : '');
   const [loading, setLoading] = useState(false);
   const [previewCount, setPreviewCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const type = ctx?.type || 'apartment';
   const toggleBHK = (b: any) => { const s = new Set(bhk); s.has(b) ? s.delete(b) : s.add(b); setBHK(s); };
-  const params = useMemo(() => ({
-    type: toBackendType(type),
-    city: city.trim() || undefined,
-    bhk: Array.from(bhk).join(',') || undefined,
-    minPrice: 2000000,
-    maxPrice: 15000000,
-    minArea: 400,
-    maxArea: 2000,
-    verified: true,
-    sort: sort === 'price-asc' ? 'price_asc' as const : sort === 'price-desc' ? 'price_desc' as const : sort === 'new' ? 'newest' as const : 'relevance' as const,
-  }), [bhk, city, sort, type]);
+  const resetFilters = () => {
+    setBHK(new Set());
+    setCity('');
+    setSort('relevance');
+    setMinLakh('');
+    setMaxLakh('');
+    setMinArea('');
+    setMaxArea('');
+  };
+  const params = useMemo(() => {
+    const minPrice = Number(minLakh) > 0 ? Math.round(Number(minLakh) * 100000) : undefined;
+    const maxPrice = Number(maxLakh) > 0 ? Math.round(Number(maxLakh) * 100000) : undefined;
+    return {
+      type: toBackendType(type),
+      city: city.trim() || undefined,
+      bhk: Array.from(bhk).join(',') || undefined,
+      minPrice,
+      maxPrice,
+      minArea: Number(minArea) > 0 ? Number(minArea) : undefined,
+      maxArea: Number(maxArea) > 0 ? Number(maxArea) : undefined,
+      sort: sort === 'price-asc' ? 'price_asc' as const : sort === 'price-desc' ? 'price_desc' as const : sort === 'new' ? 'newest' as const : 'relevance' as const,
+    };
+  }, [bhk, city, maxArea, maxLakh, minArea, minLakh, sort, type]);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -443,16 +496,22 @@ export function FilterScreen() {
   }, [params]);
   return (
     <Screen padBottom>
-      <TopBar onBack={back} title="Filters" right={<Pressable onPress={() => { setBHK(new Set()); setCity(''); setSort('relevance'); }}><Text className="text-brand-600 text-sm font-semibold">Reset</Text></Pressable>} />
-      <View className="px-4 gap-5">
-        <Field label="Location"><Input icon="map-pin" placeholder="Chennai, Bengaluru..." value={city} onChangeText={setCity} /></Field>
+      <TopBar onBack={back} title="Filters" right={<Pressable onPress={resetFilters}><Text className="text-brand-600 text-sm font-semibold">Reset</Text></Pressable>} />
+      <PageBody className="gap-5">
+        <Field label="Location"><Input icon="map-pin" placeholder="City or locality" value={city} onChangeText={setCity} /></Field>
         <View>
-          <Text className="text-[13px] font-medium mb-2">Budget: ₹20L – ₹150L</Text>
-          <View className="h-2 bg-ink-100 rounded-full"><View className="h-2 bg-brand-600 rounded-full" style={{ width: '60%' }} /></View>
+          <Text className="text-[13px] font-medium mb-2">Budget (₹ lakhs)</Text>
+          <View className="flex-row gap-3">
+            <View className="flex-1"><Input keyboardType="numeric" placeholder="Min" value={minLakh} onChangeText={(v) => setMinLakh(v.replace(/[^\d.]/g, ''))} /></View>
+            <View className="flex-1"><Input keyboardType="numeric" placeholder="Max" value={maxLakh} onChangeText={(v) => setMaxLakh(v.replace(/[^\d.]/g, ''))} /></View>
+          </View>
         </View>
         <View>
-          <Text className="text-[13px] font-medium mb-2">Area (sqft): 400 – 2000</Text>
-          <View className="h-2 bg-ink-100 rounded-full"><View className="h-2 bg-brand-600 rounded-full" style={{ width: '55%' }} /></View>
+          <Text className="text-[13px] font-medium mb-2">Area (sqft)</Text>
+          <View className="flex-row gap-3">
+            <View className="flex-1"><Input keyboardType="numeric" placeholder="Min" value={minArea} onChangeText={(v) => setMinArea(v.replace(/[^\d]/g, ''))} /></View>
+            <View className="flex-1"><Input keyboardType="numeric" placeholder="Max" value={maxArea} onChangeText={(v) => setMaxArea(v.replace(/[^\d]/g, ''))} /></View>
+          </View>
         </View>
         <View>
           <Text className="text-[13px] font-medium mb-2">BHK</Text>
@@ -462,22 +521,22 @@ export function FilterScreen() {
         </View>
         <View>
           <Text className="text-[13px] font-medium mb-2">Sort by</Text>
-          <View className="flex-row flex-wrap gap-2">
+          <View className="flex-row flex-wrap" style={{ gap: 8 }}>
             {[['relevance', 'Most relevant'], ['price-asc', 'Price: Low–High'], ['price-desc', 'Price: High–Low'], ['new', 'Newest first']].map(([id, l]) => (
-              <Pressable key={id} onPress={() => setSort(id)} style={{ width: '47%' }} className={`p-2.5 rounded-card border ${sort === id ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
+              <Pressable key={id} onPress={() => setSort(id)} className={`min-w-[46%] flex-1 p-2.5 rounded-card border min-h-[44px] justify-center ${sort === id ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
                 <Text className={`text-[12px] ${sort === id ? 'text-brand-700 font-semibold' : 'text-ink-700'}`}>{l}</Text>
               </Pressable>
             ))}
           </View>
         </View>
         {error && <ErrorCard message={error} />}
-      </View>
-      <View className="px-4 mt-4 flex-row gap-3">
-        <Btn variant="outline" onPress={back}>Clear all</Btn>
+      </PageBody>
+      <PageBody className="mt-4 flex-row gap-3">
+        <Btn variant="outline" onPress={resetFilters}>Clear all</Btn>
         <Btn className="flex-1" disabled={loading} onPress={() => go('buyList', { type, filters: params })}>
           {loading ? 'Checking...' : `Show ${previewCount} results`}
         </Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -485,21 +544,34 @@ export function FilterScreen() {
 // ─── B-03 Property Listing ───────────────────────────────────
 export function BuyListScreen() {
   const { go, back, ctx } = useNav();
+  const layout = useLayout();
   const { fav, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
   const type = ctx?.type || 'apartment';
   const filters = useMemo(() => ctx?.filters ?? {}, [ctx?.filters]);
+  const [chips, setChips] = useState<Set<string>>(new Set());
   const [list, setList] = useState<DisplayProperty[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const label = PROPERTY_TYPES.find((t) => t.id === type)?.label || 'Properties';
+  const chipFilters = useMemo(() => {
+    const extra: Record<string, unknown> = {};
+    if (chips.has('Verified')) extra.verified = true;
+    if (chips.has('Ready to move')) extra.possession = 'Ready to move';
+    if (chips.has('Under ₹1Cr')) extra.maxPrice = Math.min(Number((filters as any).maxPrice) || 10000000, 10000000);
+    if (chips.has('3+ BHK')) extra.bhk = (filters as any).bhk || '3,4,5+';
+    if (chips.has('Negotiable')) extra.negotiable = true;
+    return extra;
+  }, [chips, filters]);
+  const activeFilterCount = Object.values({ ...filters, ...chipFilters }).filter((value) => value !== undefined && value !== '' && value !== false).length;
+  const locationLabel = String((filters as any).city || list[0]?.city || '').trim();
   const loadProperties = useCallback(async (force = false) => {
     if (force) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
       const [properties] = await Promise.all([
-        listCustomerProperties({ type: toBackendType(type), limit: 50, sort: 'newest', ...filters }),
+        listCustomerProperties({ type: toBackendType(type), limit: 50, sort: 'newest', ...filters, ...chipFilters }),
         loadFavoriteIds().catch(() => new Set<string>()),
       ]);
       setList(properties.map(toDisplayProperty).filter((property) => property.id));
@@ -510,7 +582,14 @@ export function BuyListScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [filters, loadFavoriteIds, type]);
+  }, [chipFilters, filters, loadFavoriteIds, type]);
+  const toggleChip = (chip: string) => {
+    setChips((current) => {
+      const next = new Set(current);
+      next.has(chip) ? next.delete(chip) : next.add(chip);
+      return next;
+    });
+  };
   const handleFavorite = useCallback(async (id: string) => {
     try {
       await toggleRemoteFavorite(id);
@@ -526,41 +605,43 @@ export function BuyListScreen() {
       <TopBar
         onBack={back}
         title={label}
-        sub={`${list.length} properties in Chennai`}
+        sub={`${list.length} ${locationLabel ? `properties in ${locationLabel}` : 'matching properties'}`}
         right={
           <Pressable onPress={() => go('mapView')} className="w-9 h-9 rounded-full bg-ink-100 items-center justify-center">
             <Icon name="map" size={16} color="#0F172A" />
           </Pressable>
         }
       />
-      <View className="px-4 flex-row gap-2 mb-3">
-        <Pressable onPress={() => go('filters', { type })} className="flex-1 flex-row items-center gap-2 px-3 py-2 rounded-card border border-ink-200">
-          <Icon name="sliders-horizontal" size={14} color="#334155" /><Text className="text-[13px] text-ink-700">Filters · 3</Text>
+      <PageBody className="flex-row gap-2 mb-3">
+        <Pressable onPress={() => go('filters', { type, filters, city: (filters as any).city })} className="flex-1 min-w-0 flex-row items-center gap-2 px-3 py-2 rounded-card border border-ink-200">
+          <Icon name="sliders-horizontal" size={14} color="#334155" /><Text className="text-[13px] text-ink-700" numberOfLines={1}>Filters{activeFilterCount ? ` · ${activeFilterCount}` : ''}</Text>
         </Pressable>
-        <Pressable onPress={() => go('advancedFilters')} className="px-3 py-2 rounded-card bg-brand-50 flex-row items-center gap-1.5">
+        <Pressable onPress={() => go('advancedFilters')} className="px-3 py-2 rounded-card bg-brand-50 flex-row items-center gap-1.5 shrink-0">
           <Icon name="settings-2" size={14} color="#1A6FFF" /><Text className="text-[13px] font-semibold text-brand-700">Advanced</Text>
         </Pressable>
-      </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="px-4" contentContainerStyle={{ gap: 8 }}>
-        {['Verified', 'Ready to move', 'Under ₹1Cr', '3+ BHK', 'Negotiable'].map((c) => <Chip key={c} active={c === 'Verified'}>{c}</Chip>)}
+      </PageBody>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: layout.gutter }}>
+        {['Verified', 'Ready to move', 'Under ₹1Cr', '3+ BHK', 'Negotiable'].map((c) => (
+          <Chip key={c} active={chips.has(c)} onPress={() => toggleChip(c)}>{c}</Chip>
+        ))}
       </ScrollView>
       {error && <View className="mt-3"><ErrorCard message={error} onRetry={loadProperties} /></View>}
       {loading ? (
-        <View className="px-4 gap-3 mt-3">
+        <PageBody className="gap-3 mt-3">
           <LoadingBlock label="Loading matching properties..." />
           <SkeletonCard compact />
           <SkeletonCard compact />
-        </View>
+        </PageBody>
       ) : list.length === 0 ? (
         <EmptyState icon="search-x" title="No properties found" action="Change Filters" onPress={() => go('filters', { type })} />
       ) : (
-        <View className="px-4 mt-2 gap-3 pb-4">
+        <PageBody className="mt-2 gap-3 pb-4">
           {list.map((p, idx) => (
             <FadeInView key={p.id} delay={idx * 35}>
               <PropertyCard p={p} fav={fav.has(p.id)} onFav={() => handleFavorite(p.id)} onPress={() => go('propertyDetail', { p, propertyId: p.id })} />
             </FadeInView>
           ))}
-        </View>
+        </PageBody>
       )}
     </Screen>
   );
@@ -571,68 +652,80 @@ export function PropertyDetailScreen() {
   const { go, back, ctx } = useNav();
   const { fav, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
   const insets = useSafeAreaInsets();
+  const layout = useLayout();
+  const { msg, fire } = useToast();
   const initial = (ctx?.p as DisplayProperty | undefined) || EMPTY_PROPERTY;
   const [p, setProperty] = useState<DisplayProperty>(initial);
   const [loading, setLoading] = useState(!!(ctx?.propertyId || initial.id));
   const [error, setError] = useState<string | null>(null);
   const [img, setImg] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [planViewerOpen, setPlanViewerOpen] = useState(false);
+  const [planViewerIndex, setPlanViewerIndex] = useState(0);
   const propertyId = ctx?.propertyId || propertyIdOf(p);
   const imageCount = p.images.length;
   const hasMultipleImages = imageCount > 1;
   const activeImageIndex = imageCount ? Math.min(img, imageCount - 1) : 0;
   const currentImage = p.images[activeImageIndex];
   const backend = p.backend;
-  const floorPlanUrl = p.backend?.media?.floorPlanUrl;
+  const floorPlans = useMemo(() => propertyFloorPlans(backend?.media), [backend?.media]);
+  const planUrls = useMemo(() => floorPlans.map((plan) => plan.url), [floorPlans]);
+  const coords = propertyCoordinates(p);
+  const specsReady = hasAnyValue([
+    p.amenities,
+    backend?.highlights,
+    backend?.specs?.bhk,
+    backend?.specs?.builtUpArea,
+    backend?.specs?.carpetArea,
+    backend?.specs?.plotArea,
+    backend?.specs?.floor,
+    backend?.specs?.totalFloors,
+    backend?.specs?.facing,
+    backend?.specs?.age,
+    backend?.specs?.furnishing,
+    backend?.specs?.parking,
+    backend?.specs?.reraNumber,
+    backend?.specs?.possession,
+    backend?.specs?.vastuCompliant,
+    backend?.specs?.transactionType,
+  ]);
+  const locationReady = hasAnyValue([
+    backend?.advantages?.investment,
+    backend?.advantages?.location,
+    backend?.advantages?.connectivity,
+    backend?.nearbyPlaces,
+    coords,
+  ]);
   const featureLinks = [
     {
       dest: 'vrTour',
       icon: 'glasses',
       label: 'VR Tour',
-      visible: hasVirtualTour(backend?.media),
+      enabled: hasVirtualTour(backend?.media),
+      unavailable: 'VR / 3D tour is not available for this property yet.',
     },
     {
       dest: 'aerial',
       icon: 'plane',
       label: 'Aerial',
-      visible: hasAerialContent(backend?.media, propertyCoordinates(p)),
+      enabled: hasAerialContent(backend?.media),
+      unavailable: 'Aerial video or drone media has not been added for this property yet.',
     },
     {
       dest: 'specs',
       icon: 'list-checks',
       label: 'Specs',
-      visible: hasAnyValue([
-        p.amenities,
-        backend?.highlights,
-        backend?.specs?.bhk,
-        backend?.specs?.builtUpArea,
-        backend?.specs?.carpetArea,
-        backend?.specs?.plotArea,
-        backend?.specs?.floor,
-        backend?.specs?.totalFloors,
-        backend?.specs?.facing,
-        backend?.specs?.age,
-        backend?.specs?.furnishing,
-        backend?.specs?.parking,
-        backend?.specs?.reraNumber,
-        backend?.specs?.possession,
-        backend?.specs?.vastuCompliant,
-        backend?.specs?.transactionType,
-      ]),
+      enabled: specsReady,
+      unavailable: 'Specifications are not available for this property yet.',
     },
     {
       dest: 'advantages',
       icon: 'map-pin',
       label: 'Location',
-      visible: hasAnyValue([
-        backend?.advantages?.investment,
-        backend?.advantages?.location,
-        backend?.advantages?.connectivity,
-        backend?.nearbyPlaces,
-        propertyCoordinates(p),
-      ]),
+      enabled: locationReady,
+      unavailable: 'Location highlights are not available for this property yet.',
     },
-  ].filter((item) => item.visible);
+  ];
   const showPreviousImage = useCallback(() => {
     if (!hasMultipleImages) return;
     setImg((current) => (current - 1 + imageCount) % imageCount);
@@ -645,23 +738,41 @@ export function PropertyDetailScreen() {
     if (!currentImage) return;
     setViewerOpen(true);
   }, [currentImage]);
-  const loadDetail = useCallback(async () => {
+  const openPlanViewer = useCallback((index: number) => {
+    if (!planUrls.length) return;
+    setPlanViewerIndex(Math.max(0, Math.min(index, planUrls.length - 1)));
+    setPlanViewerOpen(true);
+  }, [planUrls.length]);
+  const openFeature = useCallback((dest: string, enabled: boolean, unavailable: string) => {
+    if (!enabled) {
+      fire(unavailable);
+      return;
+    }
+    go(dest, { p, propertyId: propertyIdOf(p) });
+  }, [fire, go, p]);
+  const callAdvisor = useCallback(() => {
+    void openCompanyCall().catch(() => fire('Could not open the phone dialer.'));
+  }, [fire]);
+  const loadDetail = useCallback(async (silent = false) => {
     if (!propertyId) {
       setLoading(false);
       return;
     }
-    setLoading(true);
-    setError(null);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const [detail] = await Promise.all([
         getCustomerProperty(propertyId),
         loadFavoriteIds().catch(() => new Set<string>()),
       ]);
       setProperty(toDisplayProperty(detail));
+      if (silent) setError(null);
     } catch {
-      setError('Could not load latest property details.');
+      if (!silent) setError('Could not load latest property details.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [loadFavoriteIds, propertyId]);
   const handleFavorite = useCallback(async () => {
@@ -671,9 +782,26 @@ export function PropertyDetailScreen() {
       setError('Could not update saved property. Please try again.');
     }
   }, [p, toggleRemoteFavorite]);
-  useEffect(() => {
-    loadDetail();
-  }, [loadDetail]);
+  const loadedForId = React.useRef<string | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      const silent = loadedForId.current === propertyId && !!propertyId;
+      if (propertyId) {
+        loadedForId.current = propertyId;
+        void loadDetail(silent);
+      } else {
+        setLoading(false);
+      }
+      const timer = setInterval(() => {
+        if (!cancelled && propertyId) void loadDetail(true);
+      }, 45000);
+      return () => {
+        cancelled = true;
+        clearInterval(timer);
+      };
+    }, [loadDetail, propertyId]),
+  );
   useEffect(() => {
     setImg((current) => (imageCount ? Math.min(current, imageCount - 1) : 0));
   }, [imageCount]);
@@ -685,9 +813,9 @@ export function PropertyDetailScreen() {
         showsVerticalScrollIndicator={false}
       >
         {loading && <LoadingBlock label="Loading property details..." />}
-        {error && <View className="mt-2"><ErrorCard message={error} onRetry={loadDetail} /></View>}
+        {error && <View className="mt-2"><ErrorCard message={error} onRetry={() => void loadDetail(false)} /></View>}
         <View className="relative">
-          <PhotoPlaceholder tag={p.id + activeImageIndex} height={280}>
+          <PhotoPlaceholder tag={p.id + activeImageIndex} height={layout.heroHeight}>
             {currentImage && (
               <Pressable
                 onPress={openImageViewer}
@@ -699,7 +827,7 @@ export function PropertyDetailScreen() {
               </Pressable>
             )}
             {p.verified && (
-              <View className="absolute top-16 left-4 bg-emerald-500 px-3 py-1 rounded-full flex-row items-center gap-1">
+              <View className="absolute top-16 left-4 bg-emerald-500 px-3 py-1 rounded-full flex-row items-center gap-1" style={{ top: Math.max(56, insets.top + 8) }}>
                 <Icon name="badge-check" size={12} color="white" /><Text className="text-white text-[11px] font-medium">Verified</Text>
               </View>
             )}
@@ -708,16 +836,18 @@ export function PropertyDetailScreen() {
                 <Pressable
                   accessibilityLabel="Show previous property image"
                   onPress={showPreviousImage}
-                  className="absolute left-3 top-[118px] w-11 h-11 rounded-full bg-white/90 items-center justify-center"
-                  style={{ elevation: 4 }}
+                  hitSlop={8}
+                  className="absolute left-3 w-11 h-11 rounded-full bg-white/90 items-center justify-center"
+                  style={{ top: layout.heroHeight / 2 - 22, elevation: 4 }}
                 >
                   <Icon name="chevron-left" size={24} color="#0F172A" strokeWidth={2.5} />
                 </Pressable>
                 <Pressable
                   accessibilityLabel="Show next property image"
                   onPress={showNextImage}
-                  className="absolute right-3 top-[118px] w-11 h-11 rounded-full bg-white/90 items-center justify-center"
-                  style={{ elevation: 4 }}
+                  hitSlop={8}
+                  className="absolute right-3 w-11 h-11 rounded-full bg-white/90 items-center justify-center"
+                  style={{ top: layout.heroHeight / 2 - 22, elevation: 4 }}
                 >
                   <Icon name="chevron-right" size={24} color="#0F172A" strokeWidth={2.5} />
                 </Pressable>
@@ -727,6 +857,7 @@ export function PropertyDetailScreen() {
                       key={`img-dot-${index}`}
                       accessibilityLabel={`Show property image ${index + 1}`}
                       onPress={() => setImg(index)}
+                      hitSlop={6}
                       className={`h-1.5 rounded-full ${index === activeImageIndex ? 'w-5 bg-white' : 'w-1.5 bg-white/60'}`}
                     />
                   ))}
@@ -738,57 +869,115 @@ export function PropertyDetailScreen() {
             </View>
           </PhotoPlaceholder>
         </View>
-        <View className="px-4 pt-4 pb-6">
-          <View className="flex-row items-center gap-2 mb-2">
-            <Text className="text-[28px] font-bold text-brand-600">{formatINR(p.price)}</Text>
+        <View className="pt-4 pb-6" style={{ paddingHorizontal: layout.gutter }}>
+          <View className="flex-row flex-wrap items-center gap-2 mb-2">
+            <Text style={{ fontSize: layout.isTablet ? 32 : 28 }} className="font-bold text-brand-600">{formatINR(p.price)}</Text>
             {p.negotiable && (
               <View className="bg-brand-50 px-2 py-0.5 rounded-md"><Text className="text-brand-600 text-[11px] font-semibold">Negotiable</Text></View>
             )}
           </View>
           <Text className="text-[18px] font-semibold text-ink-900 mb-2 leading-display-tight">{p.title}</Text>
-          <View className="flex-row items-center justify-between mb-4">
-            <View className="flex-row items-center gap-1">
+          <View className="flex-row items-center justify-between mb-4 gap-2">
+            <View className="flex-row items-center gap-1 flex-1 min-w-0 pr-2">
               <Icon name="map-pin" size={14} color="#475569" />
-              <Text className="text-ink-600 text-[13px]">{p.location}, {p.city}</Text>
+              <Text className="text-ink-600 text-[13px] flex-1" numberOfLines={2}>{p.location}, {p.city}</Text>
             </View>
-            <Pressable onPress={() => go('mapView', { p })}><Text className="text-brand-600 font-medium text-[12px]">View on Map →</Text></Pressable>
+            <Pressable onPress={() => go('mapView', { p, propertyId: propertyIdOf(p) })} hitSlop={8} className="min-h-[44px] justify-center">
+              <Text className="text-brand-600 font-medium text-[12px]">View on Map</Text>
+            </Pressable>
           </View>
-          <View className="flex-row flex-wrap gap-2 mb-5">
-            {[['BHK', p.bhk > 0 ? `${p.bhk} BHK` : 'Plot'], ['Floor', p.floor], ['Area', `${p.area} sqft`], ['Flat No', p.flatNo || 'N/A']].map(([label, val]) => (
-              <View key={label} style={{ width: '47%' }} className="bg-ink-50 rounded-lg p-3">
+          <View className="flex-row flex-wrap mb-5" style={{ gap: layout.gap }}>
+            {([
+              ['BHK', p.bhk ? `${p.bhk} BHK` : 'Plot'],
+              ['Floor', p.floor],
+              ['Area', `${p.area} sqft`],
+              ['Flat No', p.flatNo || 'N/A'],
+            ] as [string, string][]).map(([label, val]) => (
+              <View
+                key={label}
+                style={{ width: gridItemWidth(layout.contentWidth - layout.gutter * 2, layout.isTabletSm ? 4 : 2, layout.gap) }}
+                className="bg-ink-50 rounded-lg p-3"
+              >
                 <Text className="text-[11px] text-ink-500 mb-0.5">{label}</Text>
-                <Text className="text-[14px] font-semibold text-ink-900">{val}</Text>
+                <Text className="text-[14px] font-semibold text-ink-900" numberOfLines={1}>{val}</Text>
               </View>
             ))}
           </View>
-          <Text className="text-[15px] font-semibold mb-2">About this property</Text>
-          <Text className="text-[13px] text-ink-700 leading-relaxed mb-5">{p.desc}</Text>
-          {floorPlanUrl && (
+          {!!p.desc?.trim() && (
             <>
-              <Text className="text-[15px] font-semibold mb-2">Floor Plan</Text>
-              <View className="flex-row gap-2 mb-5">
-                <Pressable onPress={() => go('floorPlan', { p, propertyId: propertyIdOf(p) })} className="flex-1">
-                  <PhotoPlaceholder tag={'plan-' + p.id} height={90} className="rounded-md">
-                    <Image source={{ uri: floorPlanUrl }} className="absolute inset-0 w-full h-full" resizeMode="cover" />
-                    <View className="absolute bottom-1 left-1 bg-black/40 rounded px-1.5"><Text className="text-[10px] text-white font-semibold">Floor plan</Text></View>
-                  </PhotoPlaceholder>
-                </Pressable>
-              </View>
+              <Text className="text-[15px] font-semibold mb-2">About this property</Text>
+              <Text className="text-[13px] text-ink-700 leading-relaxed mb-5">{p.desc}</Text>
             </>
           )}
-          {featureLinks.length > 0 && (
-            <View className="flex-row flex-wrap gap-2">
-              {featureLinks.map(({ dest, icon, label }) => (
-                <Pressable key={dest} onPress={() => go(dest, { p, propertyId: propertyIdOf(p) })} style={{ width: '23%' }} className="p-3 rounded-card border border-ink-200 items-center">
-                  <Icon name={icon} size={20} color="#1A6FFF" />
-                  <Text className="text-[11px] font-semibold mt-1">{label}</Text>
-                </Pressable>
-              ))}
+          {floorPlans.length > 0 && (
+            <View className="mb-5">
+              <Text className="text-[15px] font-semibold text-ink-900 mb-3">Floor Plan</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 8 }}>
+                {floorPlans.map((plan, index) => (
+                  <View
+                    key={`${plan.url}-${index}`}
+                    style={{ width: layout.floorPlanThumbWidth, height: layout.isTablet ? 110 : 92, borderRadius: 16, overflow: 'hidden' }}
+                  >
+                    <Pressable
+                      onPress={() => go('floorPlan', { p, propertyId: propertyIdOf(p), planIndex: index })}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open ${plan.label}`}
+                      className="absolute inset-0"
+                    >
+                      <View className="absolute inset-0" style={{ backgroundColor: FLOOR_PLAN_ACCENTS[index % FLOOR_PLAN_ACCENTS.length] }} />
+                      <Image source={{ uri: plan.url }} className="absolute inset-0 w-full h-full" resizeMode="cover" />
+                      <View className="absolute inset-0 bg-black/10" />
+                      <View className="absolute bottom-2 left-2 bg-black/50 rounded-full px-2.5 py-1">
+                        <Text className="text-[10px] text-white font-semibold">{plan.label}</Text>
+                      </View>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => openPlanViewer(index)}
+                      accessibilityLabel={`Expand ${plan.label}`}
+                      hitSlop={8}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/45 items-center justify-center"
+                      style={{ zIndex: 2 }}
+                    >
+                      <Icon name="maximize-2" size={13} color="white" />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
             </View>
           )}
+          <View className="flex-row gap-2 mb-5">
+            {featureLinks.map(({ dest, icon, label, enabled, unavailable }) => (
+              <Pressable
+                key={dest}
+                onPress={() => openFeature(dest, enabled, unavailable)}
+                accessibilityState={{ disabled: !enabled }}
+                className={`flex-1 min-h-[76px] py-3 px-1 rounded-card border border-ink-200 items-center justify-center bg-white ${enabled ? '' : 'opacity-45'}`}
+              >
+                <Icon name={icon} size={22} color="#1A6FFF" />
+                <Text className="text-[11px] font-semibold text-ink-900 mt-1.5 text-center">{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <View className="flex-row items-center rounded-2xl bg-brand-50 px-3 py-3">
+            <View className="w-12 h-12 rounded-full bg-brand-600 items-center justify-center">
+              <Text className="text-white text-[14px] font-bold">{advisorInitials(DEFAULT_PROPERTY_ADVISOR.name)}</Text>
+            </View>
+            <View className="flex-1 ml-3 mr-2">
+              <Text className="text-[14px] font-bold text-ink-900" numberOfLines={1}>{DEFAULT_PROPERTY_ADVISOR.name}</Text>
+              <Text className="text-[12px] text-ink-500 mt-0.5">{DEFAULT_PROPERTY_ADVISOR.role}</Text>
+            </View>
+            <Pressable
+              onPress={callAdvisor}
+              accessibilityLabel="Call Builtglory advisor"
+              className="w-11 h-11 rounded-full bg-white items-center justify-center border border-ink-100"
+              style={{ elevation: 2 }}
+            >
+              <Icon name="phone" size={18} color="#1A6FFF" />
+            </Pressable>
+          </View>
         </View>
       </ScrollView>
-      <View className="absolute top-0 left-0 right-0 px-4 pt-3 flex-row items-center justify-between" style={{ zIndex: 10, elevation: 10 }}>
+      <PageBody className="absolute top-0 left-0 right-0 pt-3 flex-row items-center justify-between" style={{ zIndex: 10, elevation: 10 }}>
         <Pressable onPress={back} className="w-10 h-10 bg-white/90 rounded-full items-center justify-center">
           <Icon name="arrow-left" size={18} color="#0F172A" />
         </Pressable>
@@ -796,11 +985,23 @@ export function PropertyDetailScreen() {
           <Pressable onPress={handleFavorite} className="w-10 h-10 bg-white/90 rounded-full items-center justify-center">
             <Icon name="heart" size={18} color={fav.has(p.id) ? '#E11D48' : '#0F172A'} fill={fav.has(p.id) ? '#E11D48' : 'none'} />
           </Pressable>
-          <Pressable onPress={() => go('shareProperty', { p, propertyId: propertyIdOf(p) })} className="w-10 h-10 bg-white/90 rounded-full items-center justify-center">
+          <Pressable
+            onPress={() => {
+              sharePropertyNative({
+                id: propertyIdOf(p),
+                title: p.title,
+                location: p.location,
+                city: p.city,
+                price: p.price,
+                desc: p.desc,
+              }).catch(() => go('shareProperty', { p, propertyId: propertyIdOf(p) }));
+            }}
+            className="w-10 h-10 bg-white/90 rounded-full items-center justify-center"
+          >
             <Icon name="share-2" size={18} color="#0F172A" />
           </Pressable>
         </View>
-      </View>
+      </PageBody>
       <View className="absolute bottom-0 left-0 right-0 bg-white border-t border-ink-200 px-3 pt-3 flex-row gap-2" style={{ paddingBottom: 12 + insets.bottom, zIndex: 10, elevation: 10 }}>
         <Btn variant="outline" className="flex-1" icon="git-compare" onPress={() => go('compare', { p, propertyId: propertyIdOf(p) })}>Compare</Btn>
         <Btn className="flex-1" onPress={() => go('enquiry', { p, propertyId: propertyIdOf(p) })}>Submit Enquiry</Btn>
@@ -812,6 +1013,14 @@ export function PropertyDetailScreen() {
         onClose={() => setViewerOpen(false)}
         onImageIndexChange={setImg}
       />
+      <PropertyImageViewer
+        images={planUrls}
+        visible={planViewerOpen}
+        imageIndex={planViewerIndex}
+        onClose={() => setPlanViewerOpen(false)}
+        onImageIndexChange={setPlanViewerIndex}
+      />
+      <Toast message={msg} />
     </Screen>
   );
 }
@@ -819,41 +1028,69 @@ export function PropertyDetailScreen() {
 // ─── B-05 Specifications ─────────────────────────────────────
 export function SpecsScreen() {
   const { back, ctx } = useNav();
+  const layout = useLayout();
+  const cols = layout.tileColumns;
+  const gap = layout.gap;
+  const itemW = gridItemWidth(layout.contentWidth - layout.gutter * 2, cols, gap);
   const { property: p, loading, error, reload } = usePropertyDetailFromContext(ctx);
   const backend = p.backend;
-  const highlights = backend?.highlights?.length ? backend.highlights : [
-    backend?.specs?.facing ? `${backend.specs.facing}-facing entrance` : 'East-facing entrance',
-    backend?.specs?.vastuCompliant ? 'Vaastu compliant' : 'Legally verified by BuiltGlory',
-    backend?.specs?.reraNumber ? `RERA: ${backend.specs.reraNumber}` : '24/7 water + power',
-    backend?.specs?.possession ? `Possession: ${backend.specs.possession}` : 'Earthquake-resistant Zone-II',
-  ];
+  const specRows = propertySpecRows(backend, {
+    price: p.price,
+    type: p.type,
+    location: p.location,
+    city: p.city,
+    area: p.area,
+    bhk: p.bhk,
+    floor: p.floor,
+  });
+  const amenities = propertyAmenityLabels(backend, p.amenities);
+  const highlights = propertyHighlightLabels(backend);
   return (
     <Screen>
       <TopBar onBack={back} title="Specifications & Amenities" />
       {loading && <LoadingBlock label="Loading property specifications..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4">
-        <Text className="text-[12px] text-ink-500 mb-3">Everything {p.title} offers across 20 categories.</Text>
-        <View className="flex-row flex-wrap gap-2">
-          {SPECS.map((s) => {
-            const has = p.amenities.some((a) => a.toLowerCase().includes(s.label.toLowerCase().split(' ')[0]));
-            return (
-              <View key={s.label} style={{ width: '22%' }} className={`aspect-square rounded-card border p-2 items-center justify-center gap-1.5 ${has ? 'border-brand-200 bg-brand-50' : 'border-ink-200 opacity-40'}`}>
-                <Icon name={s.icon} size={20} color={has ? '#1A6FFF' : '#94A3B8'} />
-                <Text className="text-[9.5px] text-center font-medium leading-caption">{s.label}</Text>
+      <ScrollView contentContainerStyle={{ paddingHorizontal: layout.gutter, paddingBottom: 32 }}>
+        {!loading && !specRows.length && !amenities.length && !highlights.length && (
+          <EmptyBlock title="Specifications have not been added for this property yet." />
+        )}
+        {specRows.length > 0 && (
+          <View className="rounded-card border border-ink-200 overflow-hidden mb-5">
+            {specRows.map((row, index) => (
+              <View key={`${row.label}-${index}`} className={`flex-row px-3 py-2.5 ${index % 2 ? 'bg-ink-50' : 'bg-white'}`}>
+                <Text className="w-[42%] text-[12px] text-ink-500 pr-2">{row.label}</Text>
+                <Text className="flex-1 text-[13px] font-semibold text-ink-900">{row.value}</Text>
               </View>
-            );
-          })}
-        </View>
-        <View className="mt-6 gap-2">
-          <Text className="text-[14px] font-semibold mb-2">Property highlights</Text>
-          {highlights.map((h) => (
-            <View key={h} className="flex-row items-center gap-2">
-              <Icon name="check-circle-2" size={14} color="#10B981" /><Text className="text-[13px] text-ink-700">{h}</Text>
+            ))}
+          </View>
+        )}
+        {amenities.length > 0 && (
+          <View className="mb-5">
+            <Text className="text-[14px] font-semibold mb-3">Amenities</Text>
+            <View className="flex-row flex-wrap" style={{ gap }}>
+              {amenities.map((label) => {
+                const icon = SPECS.find((item) => label.toLowerCase().includes(item.label.toLowerCase().split(' ')[0]))?.icon ?? 'check';
+                return (
+                  <View key={label} style={{ width: itemW }} className="aspect-square rounded-card border border-brand-200 bg-brand-50 p-2 items-center justify-center gap-1.5">
+                    <Icon name={icon} size={layout.isTablet ? 22 : 20} color="#1A6FFF" />
+                    <Text style={{ fontSize: layout.isPhoneSm ? 9 : 10 }} className="text-center font-medium leading-caption" numberOfLines={2}>{label}</Text>
+                  </View>
+                );
+              })}
             </View>
-          ))}
-        </View>
-      </View>
+          </View>
+        )}
+        {highlights.length > 0 && (
+          <View className="gap-2">
+            <Text className="text-[14px] font-semibold mb-2">Property highlights</Text>
+            {highlights.map((h) => (
+              <View key={h} className="flex-row items-center gap-2">
+                <Icon name="check-circle-2" size={14} color="#10B981" /><Text className="text-[13px] text-ink-700 flex-1">{h}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </ScrollView>
     </Screen>
   );
 }
@@ -863,6 +1100,7 @@ export function AdvantagesScreen() {
   const { back, go, ctx } = useNav();
   const { property: p, propertyId, loading, error, reload } = usePropertyDetailFromContext(ctx);
   const insets = useSafeAreaInsets();
+  useGoogleMapUserLocation();
   const backend = p.backend;
   const coordinates = propertyCoordinates(p);
   const mapRegion: Region | undefined = coordinates
@@ -870,17 +1108,20 @@ export function AdvantagesScreen() {
     : undefined;
   const nearby = backend?.nearbyPlaces ?? [];
   const advs = [
-    ...(backend?.advantages?.investment ?? ['High investment potential']).map((body) => ({ icon: 'trending-up', title: 'Investment', body, color: '#10B981' })),
+    ...(backend?.advantages?.investment ?? []).map((body) => ({ icon: 'trending-up', title: 'Investment', body, color: '#10B981' })),
     ...(backend?.advantages?.location ?? []).map((body) => ({ icon: 'map-pin', title: 'Location', body, color: '#1A6FFF' })),
     ...(backend?.advantages?.connectivity ?? []).map((body) => ({ icon: 'train', title: 'Connectivity', body, color: '#8B5CF6' })),
-    ...nearby.slice(0, 3).map((place) => ({ icon: place.type === 'hospital' ? 'hospital' : place.type === 'school' ? 'school' : 'shopping-bag', title: place.name ?? 'Nearby place', body: place.distance ?? 'Nearby', color: '#F59E0B' })),
+    ...nearby.slice(0, 6).map((place) => ({ icon: place.type === 'hospital' ? 'hospital' : place.type === 'school' ? 'school' : 'shopping-bag', title: place.name ?? 'Nearby place', body: place.distance ?? 'Nearby', color: '#F59E0B' })),
   ];
   return (
     <Screen fill>
       <TopBar onBack={back} title="Advantages & Location" />
       {loading && <LoadingBlock label="Loading location advantages..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4 gap-3" style={{ paddingBottom: 104 + insets.bottom }}>
+      <PageBody className="gap-3" style={{ paddingBottom: 104 + insets.bottom }}>
+        {!loading && !advs.length && !mapRegion && (
+          <EmptyBlock title="Location details have not been added for this property yet." />
+        )}
         {advs.map((a, index) => (
           <View key={`${a.title}-${index}`} className="p-3 rounded-card border border-ink-200 flex-row items-center gap-3">
             <View className="w-11 h-11 rounded-full items-center justify-center" style={{ backgroundColor: a.color + '20' }}>
@@ -900,6 +1141,10 @@ export function AdvantagesScreen() {
                 style={{ flex: 1 }}
                 initialRegion={mapRegion}
                 showsBuildings
+                showsUserLocation
+                showsMyLocationButton
+                zoomEnabled
+                scrollEnabled
               >
                 <Marker
                   coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }}
@@ -912,8 +1157,11 @@ export function AdvantagesScreen() {
                   <Text className="text-[12px] font-semibold" numberOfLines={1}>{p.title}</Text>
                   <Text className="text-[10.5px] text-ink-500" numberOfLines={1}>{p.location}, {p.city}</Text>
                 </View>
-                <Pressable onPress={() => go('mapView', { p, propertyId })} className="bg-white px-3 py-2 rounded-xl shadow">
-                  <Text className="text-[11px] font-semibold">Open map</Text>
+                <Pressable
+                  onPress={() => openDirections(coordinates!, p.title).catch(() => go('mapView', { p, propertyId }))}
+                  className="bg-white px-3 py-2 rounded-xl shadow"
+                >
+                  <Text className="text-[11px] font-semibold">Directions</Text>
                 </Pressable>
               </View>
             </>
@@ -921,17 +1169,17 @@ export function AdvantagesScreen() {
             <View className="flex-1 items-center justify-center px-6">
               <Icon name="map-pin-off" size={32} color="#94A3B8" />
               <Text className="text-[13px] font-semibold mt-3 text-center">Map location unavailable</Text>
-              <Text className="text-[11px] text-ink-500 mt-1 text-center">Add latitude and longitude for this property to show the real map.</Text>
+              <Text className="text-[11px] text-ink-500 mt-1 text-center">Latitude and longitude have not been saved for this property yet.</Text>
             </View>
           )}
         </View>
-      </View>
+      </PageBody>
       <View className="absolute bottom-0 left-0 right-0 bg-white border-t border-ink-200 px-3 pt-3 flex-row gap-2" style={{ paddingBottom: 12 + insets.bottom, zIndex: 10, elevation: 10 }}>
         <Btn
           variant="outline"
           icon="glasses"
           className="flex-1"
-          disabled={loading}
+          disabled={loading || !hasVirtualTour(backend?.media)}
           onPress={() => go('vrTour', { p, propertyId: propertyId || propertyIdOf(p) })}
         >
           VR walk
@@ -940,7 +1188,7 @@ export function AdvantagesScreen() {
           variant="outline"
           icon="plane"
           className="flex-1"
-          disabled={loading}
+          disabled={loading || !hasAerialContent(backend?.media)}
           onPress={() => go('aerial', { p, propertyId: propertyId || propertyIdOf(p) })}
         >
           Aerial view
@@ -973,13 +1221,13 @@ export function VRTourScreen() {
       )}
       {tourReady && tourUrl && (
         <View className="flex-1">
-          <View className="px-4 py-2 flex-row items-center justify-between">
-            <Badge color="brand">LIVE 360°</Badge>
+          <PageBody className="py-2 flex-row items-center justify-between">
+            <Badge color="brand">360° Tour</Badge>
             <Text className="text-white/70 text-[11px] flex-1 ml-3" numberOfLines={1}>{p.title}</Text>
             <Pressable onPress={() => openExternalUrl(tourUrl).catch(() => undefined)} className="ml-2 px-2 py-1 rounded-full bg-white/10">
               <Icon name="external-link" size={14} color="white" />
             </Pressable>
-          </View>
+          </PageBody>
           <PropertyEmbedViewer url={tourUrl} label="virtual tour" />
         </View>
       )}
@@ -993,6 +1241,7 @@ export function AerialScreen() {
   const { property: p, loading, error, reload } = usePropertyDetailFromContext(ctx);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [showDroneMedia, setShowDroneMedia] = useState(false);
+  useGoogleMapUserLocation();
   const coordinates = propertyCoordinates(p);
   const droneUrl = aerialDroneUrl(p.backend?.media);
   const droneImageUrl = droneUrl && isImageMediaUrl(droneUrl) ? droneUrl : null;
@@ -1000,7 +1249,7 @@ export function AerialScreen() {
   const mapRegion: Region | undefined = coordinates
     ? { ...coordinates, latitudeDelta: 0.004, longitudeDelta: 0.004 }
     : undefined;
-  const aerialReady = !loading && !error && hasAerialContent(p.backend?.media, coordinates);
+  const aerialReady = !loading && !error && hasAerialContent(p.backend?.media);
   const showSatelliteMap = aerialReady && mapRegion && !showDroneMedia;
   const showDroneEmbed = aerialReady && showDroneMedia && !!droneEmbedUrl;
   const showDroneImage = aerialReady && showDroneMedia && !!droneImageUrl;
@@ -1017,14 +1266,14 @@ export function AerialScreen() {
           <Icon name="plane" size={40} color="#64748B" />
           <Text className="text-white text-[15px] font-semibold mt-4 text-center">Aerial view unavailable</Text>
           <Text className="text-white/60 text-[12px] mt-2 text-center">
-            Add map coordinates or drone media for {p.title || 'this property'} to enable the aerial view.
+            Add aerial video or drone media for {p.title || 'this property'} from the dashboard.
           </Text>
           <Btn variant="outline" className="mt-5" onPress={reload}>Refresh</Btn>
         </View>
       )}
       {aerialReady && (
         <View className="flex-1">
-          <View className="px-4 py-2 flex-row items-center gap-2">
+          <PageBody className="py-2 flex-row items-center gap-2">
             {mapRegion && (
               <Pressable
                 onPress={() => setShowDroneMedia(false)}
@@ -1043,7 +1292,7 @@ export function AerialScreen() {
             )}
             <View className="flex-1" />
             <Text className="text-white/60 text-[11px]" numberOfLines={1}>{p.title}</Text>
-          </View>
+          </PageBody>
           {showSatelliteMap && mapRegion && (
             <View className="flex-1 mx-4 mb-4 rounded-card overflow-hidden border border-white/10">
               <MapView
@@ -1054,6 +1303,10 @@ export function AerialScreen() {
                 showsBuildings
                 showsCompass
                 showsScale
+                showsUserLocation
+                showsMyLocationButton
+                zoomEnabled
+                scrollEnabled
               >
                 <Marker
                   coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }}
@@ -1103,35 +1356,36 @@ export function AerialScreen() {
 // ─── B-09 Share Property ─────────────────────────────────────
 export function ShareScreen() {
   const { back, ctx } = useNav();
+  const layout = useLayout();
   const { property: p, propertyId, loading, error, reload } = usePropertyDetailFromContext(ctx);
-  const channels: [string, string, string][] = [
-    ['message-circle', 'WhatsApp', '#25D366'], ['send', 'Telegram', '#1A6FFF'], ['mail', 'Email', '#EF4444'],
-    ['message-square', 'Messages', '#10B981'], ['twitter', 'Twitter', '#0EA5E9'], ['facebook', 'Facebook', '#1D4ED8'],
-    ['link', 'Copy link', '#64748B'], ['qr-code', 'QR code', '#0F172A'],
-  ];
   const [copied, setCopied] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const { msg, fire } = useToast();
-  const shareUrl = `https://builtglory.app/p/${propertyId || p.id}`;
-  const shareMessage = `${p.title}\n${p.location} · ${formatINR(p.price)}\n${shareUrl}`;
+  const id = propertyId || p.id;
+  const shareUrl = id ? propertyShareUrl(id) : '';
   const copyShareLink = async () => {
+    if (!shareUrl) return;
     await Clipboard.setStringAsync(shareUrl);
     setCopied(true);
     fire('Property link copied');
     setTimeout(() => setCopied(false), 1500);
   };
-  const shareProperty = async (label: string) => {
-    if (label === 'Copy link' || label === 'QR code') {
-      await copyShareLink();
-      return;
-    }
+  const openNativeShare = async () => {
+    if (!id) return;
+    setSharing(true);
     try {
-      await Share.share({
+      await sharePropertyNative({
+        id,
         title: p.title,
-        message: shareMessage,
-        url: shareUrl,
+        location: p.location,
+        city: p.city,
+        price: p.price,
+        desc: p.desc,
       });
     } catch {
-      fire('Could not open share sheet');
+      fire('Could not open the device share sheet');
+    } finally {
+      setSharing(false);
     }
   };
   return (
@@ -1139,36 +1393,28 @@ export function ShareScreen() {
       <TopBar onBack={back} title="Share property" />
       {loading && <LoadingBlock label="Loading share details..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4">
+      <View style={{ paddingHorizontal: layout.gutter }}>
         <View className="bg-ink-50 rounded-card p-3 flex-row gap-3 items-center mb-5">
-          <PhotoPlaceholder tag={p.id} width={72} height={72} className="rounded-md" />
-          <View className="flex-1">
-            <Text className="text-[13px] font-semibold" numberOfLines={1}>{p.title}</Text>
+          <PhotoPlaceholder tag={p.id} width={72} height={72} className="rounded-md">
+            {p.images[0] ? <Image source={{ uri: p.images[0] }} className="absolute inset-0 w-full h-full rounded-md" resizeMode="cover" /> : null}
+          </PhotoPlaceholder>
+          <View className="flex-1 min-w-0">
+            <Text className="text-[13px] font-semibold" numberOfLines={2}>{p.title}</Text>
             <Text className="text-[11px] text-ink-500" numberOfLines={1}>{p.location} · {formatINR(p.price)}</Text>
           </View>
         </View>
-        <Text className="text-[13px] font-semibold mb-3">Share via</Text>
-        <View className="flex-row flex-wrap gap-2 mb-5">
-          {channels.map(([i, l, c]) => (
-            <Pressable
-              key={l}
-              onPress={() => shareProperty(l).catch(() => fire('Could not share property'))}
-              style={{ width: '22%' }}
-              className="p-3 rounded-card border border-ink-200 items-center"
-            >
-              <View className="w-10 h-10 rounded-full items-center justify-center mb-1.5" style={{ backgroundColor: c + '20' }}>
-                <Icon name={i} size={18} color={c} />
-              </View>
-              <Text className="text-[10.5px] font-medium">{l}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <Text className="text-[13px] text-ink-500 mb-4">
+          Opens the native share sheet so you can send this listing through WhatsApp, Messages, Mail, or any other app installed on this device.
+        </Text>
+        <Btn icon="share-2" disabled={!id || sharing || loading} onPress={() => void openNativeShare()}>
+          {sharing ? 'Opening share sheet...' : 'Share via installed apps'}
+        </Btn>
         <Pressable
           onPress={() => copyShareLink().catch(() => fire('Could not copy link'))}
-          className="flex-row items-center gap-2 p-2.5 rounded-card bg-ink-50 border border-ink-200"
+          className="flex-row items-center gap-2 p-2.5 rounded-card bg-ink-50 border border-ink-200 mt-4"
         >
           <Icon name="link" size={14} color="#64748B" />
-          <Text className="flex-1 text-[12px] text-ink-700" numberOfLines={1}>{shareUrl}</Text>
+          <Text className="flex-1 text-[12px] text-ink-700" numberOfLines={1}>{shareUrl || 'Property link unavailable'}</Text>
           <Text className="text-brand-600 text-[12px] font-semibold">{copied ? '✓ Copied' : 'Copy'}</Text>
         </Pressable>
       </View>
@@ -1223,7 +1469,7 @@ export function EnquiryScreen() {
       {propertyError && <ErrorCard message={propertyError} onRetry={reload} />}
       {error && <ErrorCard message={error} />}
       {!authToken && <ErrorCard message="Please sign in again before submitting an enquiry." />}
-      <View className="px-4 gap-5">
+      <PageBody className="gap-5">
         <View className="bg-brand-50 rounded-card p-3 flex-row gap-3">
           <PhotoPlaceholder tag={p.id} width={60} height={60} className="rounded-md" />
           <View className="flex-1">
@@ -1263,7 +1509,7 @@ export function EnquiryScreen() {
               {['Tomorrow, 10:00 AM – 12:00 PM', 'This Weekend, 2:00 PM – 5:00 PM', 'Custom Date & Time'].map((opt) => (
                 <Pressable
                   key={opt}
-                  onPress={() => (opt === 'Custom Date & Time' ? go('visitCalendar', { p }) : setVisitTime(opt))}
+                  onPress={() => setVisitTime(opt)}
                   className={`p-3 rounded-card flex-row items-center gap-3 ${visitTime === opt ? 'bg-brand-50 border-2 border-brand-600' : 'bg-ink-50 border border-ink-200'}`}
                 >
                   <View className={`w-5 h-5 rounded-full border-2 items-center justify-center ${visitTime === opt ? 'border-brand-600' : 'border-ink-300'}`}>
@@ -1293,7 +1539,7 @@ export function EnquiryScreen() {
         <Pressable onPress={submit} disabled={!valid || loading} className={`w-full min-h-12 py-3 rounded-xl items-center justify-center flex-row gap-2 ${valid && !loading ? 'bg-brand-600' : 'bg-ink-100'}`}>
           <Text className={`font-semibold text-[15px] ${valid && !loading ? 'text-white' : 'text-ink-400'}`}>{loading ? 'Submitting…' : 'Submit Enquiry'}</Text>
         </Pressable>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -1329,6 +1575,14 @@ export function EnquirySuccessScreen() {
         </View>
         <View className="mt-6 flex-row gap-2 w-full">
           <Btn variant="outline" size="sm" className="flex-1" onPress={() => resetTo('home')}>Home</Btn>
+          <Btn
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onPress={() => go('propertyDetail', { p: ctx?.p, propertyId: ctx?.propertyId })}
+          >
+            View Property
+          </Btn>
           <Btn size="sm" className="flex-1" onPress={() => go('visitCalendar', { p: ctx?.p, propertyId: ctx?.propertyId, enquiry: latest ?? enquiry })}>Schedule Visit</Btn>
         </View>
       </View>
@@ -1338,6 +1592,10 @@ export function EnquirySuccessScreen() {
 
 // ─── B-12 Visit Calendar ─────────────────────────────────────
 export function VisitCalendarScreen() {
+  const layout = useLayout();
+  const slotCols = layout.isPhoneSm ? 3 : layout.isTablet ? 6 : 4;
+  const slotGap = layout.gap;
+  const slotW = gridItemWidth(layout.contentWidth - layout.gutter * 2, slotCols, slotGap);
   const { completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const enquiryResource = useBuyEnquiryResource(ctx);
@@ -1395,7 +1653,7 @@ export function VisitCalendarScreen() {
       {loading && <LoadingBlock label="Loading property context..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
       {submitError && <ErrorCard message={submitError} />}
-      <View className="px-4">
+      <PageBody>
         {availability.loading && <View className="mb-4"><LoadingBlock label="Checking live visit slots..." /></View>}
         {availability.error && <View className="mb-4"><ErrorCard message={availability.error} onRetry={availability.reload} /></View>}
         {availability.availability && (
@@ -1416,14 +1674,14 @@ export function VisitCalendarScreen() {
           })}
         </ScrollView>
         <Text className="text-[14px] font-semibold mt-5 mb-2">Available time slots</Text>
-        <View className="flex-row flex-wrap gap-2">
+        <View className="flex-row flex-wrap" style={{ gap: slotGap }}>
           {slotOptions.map((s) => (
             <Pressable
               key={s.time}
               disabled={!s.available}
               onPress={() => setSlot(s.time)}
-              style={{ width: '22%' }}
-              className={`py-2.5 rounded-card border items-center ${slot === s.time ? 'border-brand-600 bg-brand-50' : s.available ? 'border-ink-200' : 'border-ink-100 bg-ink-50'}`}
+              style={{ width: slotW }}
+              className={`py-2.5 rounded-card border items-center min-h-[44px] justify-center ${slot === s.time ? 'border-brand-600 bg-brand-50' : s.available ? 'border-ink-200' : 'border-ink-100 bg-ink-50'}`}
             >
               <Text className={`text-[11.5px] ${slot === s.time ? 'text-brand-700 font-semibold' : s.available ? '' : 'text-ink-300 line-through'}`}>{s.time}</Text>
             </Pressable>
@@ -1431,10 +1689,10 @@ export function VisitCalendarScreen() {
         </View>
         <View className="mt-4 p-3 bg-ink-50 rounded-card flex-row items-center gap-2">
           <Icon name="calendar" size={14} color="#1A6FFF" />
-          <Text className="text-[12px]">Visit request for <Text className="font-bold">{selectedDateLabel} at {slot}</Text></Text>
+          <Text className="text-[12px] flex-1">Visit request for <Text className="font-bold">{selectedDateLabel} at {slot}</Text></Text>
         </View>
         <Btn className="w-full mt-4" disabled={submitting || availability.loading || !!availability.error || !selectedSlotAvailable} onPress={submitVisit}>{submitting ? 'Scheduling...' : 'Confirm visit'}</Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -1450,12 +1708,12 @@ export function VisitConfirmationScreen() {
   const directionsQuery = coords ? `${coords.latitude},${coords.longitude}` : [p.location, p.city].filter(Boolean).join(' ');
   return (
     <Screen>
-      <View className="px-4 pt-8 items-center">
+      <PageBody className="pt-8 items-center">
         <SuccessBurst icon="calendar-check" color="#1A6FFF" bgClassName="bg-brand-50" />
         <Text className="text-[22px] font-bold">Visit confirmed!</Text>
         <Text className="text-ink-500 mt-2 text-[13px]">We've added it to your calendar.</Text>
-      </View>
-      <View className="px-4 mt-6">
+      </PageBody>
+      <PageBody className="mt-6">
         <View className="rounded-card border border-ink-200 overflow-hidden mb-4">
           <View className="bg-brand-600 px-4 py-3">
             <Text className="text-[11px] uppercase tracking-wider text-white/80">Your visit</Text>
@@ -1495,7 +1753,7 @@ export function VisitConfirmationScreen() {
           <Btn variant="outline" className="flex-1" icon="calendar" onPress={() => go('rescheduleVisit', { p, propertyId: ctx?.propertyId, visit, date: ctx?.date, slot: ctx?.slot })}>Reschedule</Btn>
         </View>
         <Btn className="w-full" onPress={() => resetTo('home')}>Done</Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -1546,7 +1804,7 @@ export function NRIVideoCallScreen() {
     <Screen padBottom>
       <TopBar onBack={back} title="Schedule Video Call" sub="NRI Property Tour" />
       {error && <ErrorCard message={error} />}
-      <View className="px-4">
+      <PageBody>
         <View className="rounded-card border border-ink-200 p-3 mb-4 flex-row gap-3">
           <PhotoPlaceholder tag={p.id} width={56} height={56} className="rounded-md" />
           <View className="flex-1">
@@ -1564,17 +1822,17 @@ export function NRIVideoCallScreen() {
           </View>
         )}
         <Text className="text-[13px] font-semibold text-ink-900 mb-2">Preferred Language</Text>
-        <View className="flex-row flex-wrap gap-2 mb-4">
+        <View className="flex-row flex-wrap mb-4" style={{ gap: 8 }}>
           {[['english', 'English'], ['tamil', 'Tamil'], ['hindi', 'Hindi'], ['kannada', 'Kannada']].map(([code, name]) => (
-            <Pressable key={code} onPress={() => setLanguage(code)} style={{ width: '47%' }} className={`py-2.5 rounded-card border items-center ${language === code ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
+            <Pressable key={code} onPress={() => setLanguage(code)} className={`min-w-[46%] flex-1 py-2.5 rounded-card border items-center min-h-[44px] justify-center ${language === code ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
               <Text className={`text-[12px] font-medium ${language === code ? 'text-brand-700' : ''}`}>{name}</Text>
             </Pressable>
           ))}
         </View>
         <Text className="text-[13px] font-semibold text-ink-900 mb-2">Select Date</Text>
-        <View className="flex-row flex-wrap gap-2 mb-4">
+        <View className="flex-row flex-wrap mb-4" style={{ gap: 8 }}>
           {dates.map((d) => (
-            <Pressable key={d.iso} onPress={() => setSelectedDate(d.iso)} style={{ width: '31%' }} className={`py-2 rounded-card border items-center ${selectedDate === d.iso ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
+            <Pressable key={d.iso} onPress={() => setSelectedDate(d.iso)} className={`min-w-[30%] flex-1 py-2 rounded-card border items-center min-h-[44px] justify-center ${selectedDate === d.iso ? 'border-brand-600 bg-brand-50' : 'border-ink-200'}`}>
               <Text className={`text-[12px] font-medium ${selectedDate === d.iso ? 'text-brand-700' : ''}`}>{d.label}</Text>
             </Pressable>
           ))}
@@ -1592,7 +1850,7 @@ export function NRIVideoCallScreen() {
             </Pressable>
           ))}
         </View>
-      </View>
+      </PageBody>
       <Btn
         className="mx-4"
         disabled={!selectedDate || !selectedSlotAvailable || submitting || availability.loading || !!availability.error}
@@ -1606,7 +1864,7 @@ export function NRIVideoCallScreen() {
 
 // ─── B-13b NRI Video Call Confirmation ───────────────────────
 export function NRIVideoCallConfirmScreen() {
-  const { go, resetTo, ctx } = useNav();
+  const { openFromTabRoot, resetTo, ctx } = useNav();
   useFlowCompletionBack();
   const p: Property = ctx?.p || EMPTY_PROPERTY;
   const visit = ctx?.visit as CustomerVisit | undefined;
@@ -1627,7 +1885,7 @@ export function NRIVideoCallConfirmScreen() {
           </View>
         </View>
         <View className="mt-6 flex-row gap-2 w-full">
-          <Btn variant="outline" className="flex-1" onPress={() => go('myVisits')}>My Visits</Btn>
+          <Btn variant="outline" className="flex-1" onPress={() => openFromTabRoot('myVisits')}>My Visits</Btn>
           <Btn className="flex-1" onPress={() => resetTo('home')}>Home</Btn>
         </View>
       </View>
@@ -1696,7 +1954,7 @@ export function FavoritesScreen() {
     <Screen refreshing={refreshing} onRefresh={() => loadFavorites(true)}>
       <TopBar onBack={back} title="Favorites" sub={`${list.length} saved`} />
       {error && <ErrorCard message={error} onRetry={loadFavorites} />}
-      <View className="px-4">
+      <PageBody>
         {loading ? (
           <LoadingBlock label="Loading saved properties..." />
         ) : list.length === 0 ? (
@@ -1710,76 +1968,181 @@ export function FavoritesScreen() {
             ))}
           </View>
         )}
-      </View>
+      </PageBody>
     </Screen>
   );
 }
 
 // ─── B-15 Comparison ─────────────────────────────────────────
+const MAX_COMPARE = 3;
+
+function compareValue(property: DisplayProperty | null, key: string) {
+  if (!property) return '—';
+  const specs = property.backend?.specs;
+  switch (key) {
+    case 'Price': return property.price ? formatINR(property.price) : '—';
+    case 'Type': return formatPropertyTypeLabel(property.type);
+    case 'Location': return [property.location, property.city].filter(Boolean).join(', ') || '—';
+    case 'Area': return property.area ? `${property.area.toLocaleString('en-IN')} sqft` : '—';
+    case 'Bedrooms': return specs?.bhk || property.bhk || '—';
+    case 'Bathrooms': return specs?.bathrooms || specs?.washrooms || '—';
+    case 'Floor': return specs?.floor || property.floor || '—';
+    case 'Facing': return specs?.facing || '—';
+    case 'Furnishing': return specs?.furnishing || '—';
+    case 'Parking': return specs?.parking || '—';
+    case 'Amenities': return propertyAmenityLabels(property.backend, property.amenities).join(', ') || '—';
+    default: return '—';
+  }
+}
+
 export function CompareScreen() {
   const { back, ctx } = useNav();
-  const { property: a, loading, error, reload } = usePropertyDetailFromContext(ctx);
-  const [b, setB] = useState<DisplayProperty | null>(null);
+  const layout = useLayout();
+  const { property: seed, loading, error, reload } = usePropertyDetailFromContext(ctx);
+  const [items, setItems] = useState<DisplayProperty[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState('');
+  const [pickerResults, setPickerResults] = useState<DisplayProperty[]>([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerImages, setViewerImages] = useState<string[]>([]);
   const [viewerIndex, setViewerIndex] = useState(0);
+  useEffect(() => {
+    if (!seed.id) return;
+    setItems((current) => {
+      const index = current.findIndex((item) => item.id === seed.id);
+      if (index === -1) return [seed, ...current];
+      const next = [...current];
+      next[index] = seed;
+      return next;
+    });
+  }, [seed]);
   const openPropertyImages = useCallback((property: DisplayProperty, startIndex = 0) => {
     if (!property.images.length) return;
     setViewerImages(property.images);
     setViewerIndex(Math.min(startIndex, property.images.length - 1));
     setViewerOpen(true);
   }, []);
+  const addProperty = useCallback((property: DisplayProperty) => {
+    setItems((current) => {
+      if (current.some((item) => item.id === property.id)) return current;
+      if (current.length >= MAX_COMPARE) return current;
+      return [...current, property];
+    });
+    setPickerOpen(false);
+    setPickerQuery('');
+  }, []);
+  const removeProperty = useCallback((id: string) => {
+    setItems((current) => current.filter((item) => item.id !== id));
+  }, []);
   useEffect(() => {
-    listCustomerProperties({ type: toBackendType(a.type), limit: 2, sort: 'newest' })
-      .then((properties) => {
-        const match = properties.map(toDisplayProperty).find((property) => property.id !== a.id);
-        if (match) setB(match);
-      })
-      .catch(() => undefined);
-  }, [a.id, a.type]);
-  const rows: [string, any, any][] = [
-    ['Price', formatINR(a.price), b ? formatINR(b.price) : '—'],
-    ['BHK', a.bhk || '—', b?.bhk || '—'],
-    ['Area', a.area ? `${a.area} sqft` : '—', b?.area ? `${b.area} sqft` : '—'],
-    ['Floor', a.floor, b?.floor ?? '—'],
-    ['Verified', a.verified, b?.verified ?? '—'],
-    ['Rating', '⭐ ' + a.rating, b ? '⭐ ' + b.rating : '—'],
-  ];
+    if (!pickerOpen) return;
+    let cancelled = false;
+    setPickerLoading(true);
+    setPickerError(null);
+    const timer = setTimeout(async () => {
+      try {
+        const properties = await listCustomerProperties({
+          search: pickerQuery.trim() || undefined,
+          limit: 20,
+          sort: 'newest',
+        });
+        if (cancelled) return;
+        const selected = new Set(items.map((item) => item.id));
+        setPickerResults(properties.map(toDisplayProperty).filter((property) => property.id && !selected.has(property.id)));
+      } catch {
+        if (!cancelled) {
+          setPickerResults([]);
+          setPickerError('Could not load properties to compare.');
+        }
+      } finally {
+        if (!cancelled) setPickerLoading(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [items, pickerOpen, pickerQuery]);
+  const compareKeys = ['Price', 'Type', 'Location', 'Area', 'Bedrooms', 'Bathrooms', 'Floor', 'Facing', 'Furnishing', 'Parking', 'Amenities'];
+  const columns = items.length ? items : [null];
   return (
     <Screen>
-      <TopBar onBack={back} title="Compare properties" />
+      <TopBar
+        onBack={back}
+        title="Compare properties"
+        right={items.length < MAX_COMPARE ? (
+          <Pressable onPress={() => setPickerOpen(true)}><Text className="text-brand-600 text-sm font-semibold">Add</Text></Pressable>
+        ) : undefined}
+      />
       {loading && <LoadingBlock label="Loading comparison..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <View className="px-4">
-        <View className="flex-row gap-2 mb-4">
-          {[a, b].map((p, index) => (
-            <View key={p?.id ?? `empty-${index}`} className="flex-1 rounded-card border border-ink-200 overflow-hidden">
-              {p ? (
-                <Pressable onPress={() => openPropertyImages(p)} accessibilityRole="imagebutton" accessibilityLabel={`Open images for ${p.title}`}>
-                  <PhotoPlaceholder tag={p.id} height={90}>
-                    {p.images[0] && <Image source={{ uri: p.images[0] }} className="absolute inset-0 w-full h-full" resizeMode="cover" />}
-                  </PhotoPlaceholder>
+      <PageBody>
+        {!items.length && !loading && (
+          <EmptyBlock title="Add at least one more property to compare." action="Add property" onPress={() => setPickerOpen(true)} />
+        )}
+        {items.length > 0 && (
+          <>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 8 }}>
+              {items.map((p) => (
+                <View key={p.id} style={{ width: Math.max(140, (layout.contentWidth - layout.gutter * 2 - 16) / Math.min(items.length, 2)) }} className="rounded-card border border-ink-200 overflow-hidden">
+                  <Pressable onPress={() => openPropertyImages(p)} accessibilityRole="imagebutton" accessibilityLabel={`Open images for ${p.title}`}>
+                    <PhotoPlaceholder tag={p.id} height={90}>
+                      {p.images[0] && <Image source={{ uri: p.images[0] }} className="absolute inset-0 w-full h-full" resizeMode="cover" />}
+                    </PhotoPlaceholder>
+                  </Pressable>
+                  <View className="p-2">
+                    <Text className="text-[11px] font-semibold" numberOfLines={2}>{p.title}</Text>
+                    <Text className="text-[10px] text-ink-500" numberOfLines={1}>{p.location}</Text>
+                    {items.length > 1 && (
+                      <Pressable onPress={() => removeProperty(p.id)} className="mt-2">
+                        <Text className="text-[11px] font-semibold text-rose-600">Remove</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+              ))}
+              {items.length < MAX_COMPARE && (
+                <Pressable onPress={() => setPickerOpen(true)} style={{ width: 120 }} className="h-[148px] rounded-card border border-dashed border-ink-300 items-center justify-center">
+                  <Icon name="plus" size={22} color="#1A6FFF" />
+                  <Text className="text-[11px] font-semibold text-brand-600 mt-2">Add property</Text>
                 </Pressable>
-              ) : (
-                <View className="h-[90px] bg-ink-50 items-center justify-center"><Icon name="search-x" size={22} color="#94A3B8" /></View>
               )}
-              <View className="p-2">
-                <Text className="text-[11px] font-semibold" numberOfLines={1}>{p?.title ?? 'No comparable property'}</Text>
-                <Text className="text-[10px] text-ink-500" numberOfLines={1}>{p?.location ?? 'Live inventory did not return a match'}</Text>
-              </View>
+            </ScrollView>
+            <View className="rounded-card border border-ink-200 overflow-hidden mt-2">
+              {compareKeys.map((key, i) => (
+                <View key={key} className={`flex-row ${i % 2 ? 'bg-ink-50' : ''}`}>
+                  <View className="px-2 py-2.5 shrink-0" style={{ width: layout.isPhoneSm ? 72 : 88, minWidth: 64 }}>
+                    <Text className="text-[11px] text-ink-500 font-medium" numberOfLines={2}>{key}</Text>
+                  </View>
+                  {columns.map((property, index) => (
+                    <View key={`${key}-${property?.id ?? index}`} className="flex-1 min-w-0 px-2 py-2.5 border-l border-ink-200">
+                      <Text className="text-[12px] font-semibold" numberOfLines={3}>{compareValue(property, key)}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
-        <View className="rounded-card border border-ink-200 overflow-hidden">
-          {rows.map(([k, va, vb], i) => (
-            <View key={k} className={`flex-row ${i % 2 ? 'bg-ink-50' : ''}`}>
-              <View className="px-3 py-2.5" style={{ width: 80 }}><Text className="text-[11px] text-ink-500 font-medium">{k}</Text></View>
-              <View className="flex-1 px-2 py-2.5 border-l border-ink-200"><Text className="text-[12px] font-semibold">{String(va)}</Text></View>
-              <View className="flex-1 px-2 py-2.5 border-l border-ink-200"><Text className="text-[12px] font-semibold">{String(vb)}</Text></View>
-            </View>
-          ))}
-        </View>
-      </View>
+          </>
+        )}
+      </PageBody>
+      {pickerOpen && (
+        <Sheet title="Add a property" onClose={() => setPickerOpen(false)}>
+          <Input icon="search" placeholder="Search live listings" value={pickerQuery} onChangeText={setPickerQuery} />
+          {pickerLoading && <LoadingBlock label="Searching properties..." />}
+          {pickerError && <ErrorCard message={pickerError} />}
+          {!pickerLoading && !pickerResults.length && <EmptyBlock title="No matching properties found." />}
+          <View className="gap-2 mt-3">
+            {pickerResults.map((property) => (
+              <Pressable key={property.id} onPress={() => addProperty(property)} className="p-3 rounded-card border border-ink-200">
+                <Text className="text-[13px] font-semibold" numberOfLines={1}>{property.title}</Text>
+                <Text className="text-[11px] text-ink-500" numberOfLines={1}>{property.location} · {formatINR(property.price)}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </Sheet>
+      )}
       <PropertyImageViewer
         images={viewerImages}
         visible={viewerOpen}
@@ -1802,13 +2165,23 @@ export function AdvancedFiltersScreen() {
     { title: 'Age of property', options: ['< 1 yr', '1–5 yr', '5–10 yr', '10+ yr'] },
     { title: 'Posted by', options: ['Owner', 'Builder', 'Dealer'] },
   ];
-  const [sel, setSel] = useState<Record<string, Set<string>>>({ Furnishing: new Set(['Semi-furnished']), Facing: new Set(['East']) });
-  const [amenities, setAmenities] = useState<Set<string>>(new Set(['Lift', 'Pool', 'Parking']));
+  const [sel, setSel] = useState<Record<string, Set<string>>>({});
+  const [amenities, setAmenities] = useState<Set<string>>(new Set());
   const [previewCount, setPreviewCount] = useState(0);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const toggle = (t: string, o: string) => { const s = new Set(sel[t] || []); s.has(o) ? s.delete(o) : s.add(o); setSel({ ...sel, [t]: s }); };
-  const toggleAmenity = (label: string) => { const s = new Set(amenities); s.has(label) ? s.delete(label) : s.add(label); setAmenities(s); };
+  const toggle = (t: string, o: string) => {
+    const s = new Set(sel[t] || []);
+    s.has(o) ? s.delete(o) : s.add(o);
+    const next = { ...sel, [t]: s };
+    if (s.size === 0) delete next[t];
+    setSel(next);
+  };
+  const toggleAmenity = (label: string) => {
+    const s = new Set(amenities);
+    s.has(label) ? s.delete(label) : s.add(label);
+    setAmenities(s);
+  };
   const reset = () => {
     setSel({});
     setAmenities(new Set());
@@ -1852,7 +2225,7 @@ export function AdvancedFiltersScreen() {
   return (
     <Screen padBottom>
       <TopBar onBack={back} title="Advanced filters" right={<Pressable onPress={reset}><Text className="text-brand-600 text-sm font-semibold">Reset</Text></Pressable>} />
-      <View className="px-4 gap-5">
+      <PageBody className="gap-5">
         {!!error && <ErrorCard message={error} />}
         {sections.map((sec) => (
           <View key={sec.title}>
@@ -1868,13 +2241,13 @@ export function AdvancedFiltersScreen() {
             {SPECS.slice(0, 12).map((s) => <Chip key={s.label} active={amenities.has(s.label)} icon={s.icon} onPress={() => toggleAmenity(s.label)}>{s.label}</Chip>)}
           </View>
         </View>
-      </View>
-      <View className="px-4 mt-4 flex-row gap-2">
+      </PageBody>
+      <PageBody className="mt-4 flex-row gap-2">
         <Btn variant="outline" className="flex-1" onPress={reset}>Clear</Btn>
         <Btn className="flex-1" disabled={checking} onPress={() => go('buyList', { type: backendFilters.type, filters: backendFilters, amenities: Array.from(amenities) })}>
           {checking ? 'Checking...' : `Apply (${previewCount})`}
         </Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }
@@ -1901,11 +2274,13 @@ function regionForPins(pins: PropertyMapPin[], activeId?: string): Region | unde
 export function MapViewScreen() {
   const { go, back, ctx } = useNav();
   const { fav, loadFavoriteIds, toggleRemoteFavorite } = useAppState();
+  const mapRef = useRef<MapView | null>(null);
   const [pins, setPins] = useState<PropertyMapPin[]>([]);
   const [region, setRegion] = useState<Region>();
   const [active, setActive] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  useGoogleMapUserLocation();
   const loadMapProperties = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -1932,9 +2307,11 @@ export function MapViewScreen() {
         p: property,
       }));
       const activeId = selected?.id && next.some((pin) => pin.id === selected.id) ? selected.id : next[0]?.id ?? '';
+      const nextRegion = regionForPins(next, activeId);
       setPins(next);
       setActive(activeId);
-      setRegion(regionForPins(next, activeId));
+      setRegion(nextRegion);
+      if (nextRegion) mapRef.current?.animateToRegion(nextRegion, 500);
     } catch {
       setPins([]);
       setRegion(undefined);
@@ -1947,13 +2324,16 @@ export function MapViewScreen() {
   const activePin = pins.find((pin) => pin.id === active);
   const selectPin = useCallback((pin: PropertyMapPin) => {
     setActive(pin.id);
-    setRegion((current) => ({
-      latitude: pin.latitude,
-      longitude: pin.longitude,
-      latitudeDelta: current?.latitudeDelta ?? 0.01,
-      longitudeDelta: current?.longitudeDelta ?? 0.01,
-    }));
-  }, []);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: pin.latitude,
+        longitude: pin.longitude,
+        latitudeDelta: region?.latitudeDelta ?? 0.01,
+        longitudeDelta: region?.longitudeDelta ?? 0.01,
+      },
+      450,
+    );
+  }, [region?.latitudeDelta, region?.longitudeDelta]);
   useEffect(() => {
     loadMapProperties();
   }, [loadMapProperties]);
@@ -1966,12 +2346,17 @@ export function MapViewScreen() {
         {!loading && !error && pins.length === 0 && <EmptyBlock title="No properties with map coordinates found" action="Change Filters" onPress={() => go('advancedFilters')} />}
         {!loading && !error && pins.length > 0 && region && (
           <MapView
+            ref={mapRef}
             provider={PROVIDER_GOOGLE}
             style={{ flex: 1 }}
-            region={region}
+            initialRegion={region}
             onRegionChangeComplete={setRegion}
             showsUserLocation
             showsMyLocationButton
+            zoomEnabled
+            zoomControlEnabled
+            scrollEnabled
+            rotateEnabled
           >
             {pins.map((pin) => (
               <Marker
@@ -1995,6 +2380,16 @@ export function MapViewScreen() {
           <Text className="mb-2 text-[11px] text-ink-500">
             Coordinates: {activePin?.latitude.toFixed(5)}, {activePin?.longitude.toFixed(5)}
           </Text>
+          {activePin && (
+            <Btn
+              variant="outline"
+              icon="navigation"
+              className="mb-2"
+              onPress={() => openDirections({ latitude: activePin.latitude, longitude: activePin.longitude }, ap.title).catch(() => setError('Could not open directions.'))}
+            >
+              Get directions
+            </Btn>
+          )}
           <PropertyCard p={ap} variant="compact" fav={fav.has(ap.id)} onFav={() => toggleRemoteFavorite(ap.id).catch(() => setError('Could not update saved property.'))} onPress={() => go('propertyDetail', { p: ap, propertyId: ap.id })} />
         </View>
       )}
@@ -2005,15 +2400,30 @@ export function MapViewScreen() {
 // ─── B-04a Floor Plan Viewer ─────────────────────────────────
 export function FloorPlanScreen() {
   const { back, ctx } = useNav();
+  const layout = useLayout();
   const { property: p, loading, error, reload } = usePropertyDetailFromContext(ctx);
   const area = p.area || toNumber(p.backend?.specs?.builtUpArea ?? p.backend?.specs?.carpetArea ?? p.backend?.specs?.plotArea);
-  const floorPlanUrl = p.backend?.media?.floorPlanUrl;
-  const plans = p.backend?.media?.floorPlanUrl
-    ? [{ label: `${p.bhk > 0 ? `${p.bhk} BHK` : 'Property'} — ${area || 'Area'} sqft` }]
-    : [{ label: '2 BHK — 950 sqft' }, { label: '3 BHK — 1200 sqft' }, { label: '4 BHK — 1600 sqft' }];
-  const [active, setActive] = useState(0);
+  const floorPlans = useMemo(() => propertyFloorPlans(p.backend?.media), [p.backend?.media]);
+  const planUrls = useMemo(() => floorPlans.map((plan) => plan.url), [floorPlans]);
+  const initialPlanIndex = Math.max(0, Math.min(toNumber(ctx?.planIndex, 0), Math.max(planUrls.length - 1, 0)));
+  const [active, setActive] = useState(initialPlanIndex);
   const [viewerOpen, setViewerOpen] = useState(false);
   const { msg, fire } = useToast();
+  const activePlan = floorPlans[active];
+  const floorPlanUrl = activePlan?.url ?? planUrls[0];
+  const planChips = floorPlans.length
+    ? floorPlans.map((plan) => plan.label)
+    : [`${p.bhk > 0 ? `${p.bhk} BHK` : 'Property'} — ${area || 'Area'} sqft`];
+  useEffect(() => {
+    setActive(initialPlanIndex);
+  }, [initialPlanIndex, p.id]);
+  useEffect(() => {
+    if (!planUrls.length) {
+      setActive(0);
+      return;
+    }
+    setActive((current) => Math.min(current, planUrls.length - 1));
+  }, [planUrls.length]);
   return (
     <Screen dark>
       <TopBar
@@ -2028,14 +2438,14 @@ export function FloorPlanScreen() {
       />
       {loading && <LoadingBlock label="Loading floor plans..." />}
       {error && <ErrorCard message={error} onRetry={reload} />}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="px-4 mb-3" contentContainerStyle={{ gap: 8 }}>
-        {plans.map((pl, i) => (
-          <Pressable key={i} onPress={() => setActive(i)} className={`px-3 py-1.5 rounded-full ${active === i ? 'bg-brand-600' : 'bg-white/10'}`}>
-            <Text className={`text-[12px] font-semibold ${active === i ? 'text-white' : 'text-white/70'}`}>{pl.label}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-3" contentContainerStyle={{ gap: 8, paddingHorizontal: layout.gutter }}>
+        {planChips.map((label, i) => (
+          <Pressable key={`${label}-${i}`} onPress={() => setActive(i)} className={`px-3 py-1.5 rounded-full ${active === i ? 'bg-brand-600' : 'bg-white/10'}`}>
+            <Text className={`text-[12px] font-semibold ${active === i ? 'text-white' : 'text-white/70'}`}>{label}</Text>
           </Pressable>
         ))}
       </ScrollView>
-      <View className="flex-1 items-center justify-center px-4">
+      <PageBody className="flex-1 items-center justify-center">
         <Pressable
           onPress={() => floorPlanUrl && setViewerOpen(true)}
           disabled={!floorPlanUrl}
@@ -2045,7 +2455,9 @@ export function FloorPlanScreen() {
         >
           <PhotoPlaceholder tag={'plan' + active + p.id} height={320} className="rounded-card w-full">
             {floorPlanUrl && <Image source={{ uri: floorPlanUrl }} className="absolute inset-0 w-full h-full" resizeMode="contain" />}
-            <View className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/40 items-center justify-center"><Icon name="compass" size={16} color="white" /></View>
+            <View className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/40 items-center justify-center">
+              <Icon name="maximize-2" size={16} color="white" />
+            </View>
             {floorPlanUrl && (
               <Pressable onPress={() => openExternalUrl(floorPlanUrl).catch(() => fire('Could not open floor plan'))} className="absolute bottom-3 left-3 right-3 h-10 rounded-card bg-white/90 items-center justify-center">
                 <Text className="text-[12px] font-semibold text-ink-900">Open original floor plan</Text>
@@ -2053,11 +2465,13 @@ export function FloorPlanScreen() {
             )}
           </PhotoPlaceholder>
         </Pressable>
-      </View>
+      </PageBody>
       <PropertyImageViewer
-        images={floorPlanUrl ? [floorPlanUrl] : []}
+        images={planUrls}
         visible={viewerOpen}
+        imageIndex={active}
         onClose={() => setViewerOpen(false)}
+        onImageIndexChange={setActive}
       />
       <Toast message={msg} />
     </Screen>
@@ -2066,6 +2480,10 @@ export function FloorPlanScreen() {
 
 // ─── B-12a Reschedule Visit ───────────────────────────────────
 export function RescheduleVisitScreen() {
+  const layout = useLayout();
+  const slotCols = layout.isPhoneSm ? 3 : layout.isTablet ? 6 : 4;
+  const slotGap = layout.gap;
+  const slotW = gridItemWidth(layout.contentWidth - layout.gutter * 2, slotCols, slotGap);
   const { completeTo, back, ctx } = useNav();
   const { authToken } = useAppState();
   const p: DisplayProperty = ctx?.p || EMPTY_PROPERTY;
@@ -2124,7 +2542,7 @@ export function RescheduleVisitScreen() {
           <Text className="text-[12px] text-amber-700">{prevDate} · {prevSlot}</Text>
         </View>
       </View>
-      <View className="px-4">
+      <PageBody>
         {availability.loading && <View className="mb-4"><LoadingBlock label="Checking live reschedule slots..." /></View>}
         {availability.error && <View className="mb-4"><ErrorCard message={availability.error} onRetry={availability.reload} /></View>}
         {availability.availability && (
@@ -2145,14 +2563,14 @@ export function RescheduleVisitScreen() {
           })}
         </ScrollView>
         <Text className="text-[14px] font-semibold mt-5 mb-2">Available time slots</Text>
-        <View className="flex-row flex-wrap gap-2">
+        <View className="flex-row flex-wrap" style={{ gap: slotGap }}>
           {slotOptions.map((s) => (
             <Pressable
               key={s.time}
               disabled={!s.available}
               onPress={() => setSlot(s.time)}
-              style={{ width: '22%' }}
-              className={`py-2.5 rounded-card border items-center ${slot === s.time ? 'border-brand-600 bg-brand-50' : s.available ? 'border-ink-200' : 'border-ink-100 bg-ink-50'}`}
+              style={{ width: slotW }}
+              className={`py-2.5 rounded-card border items-center min-h-[44px] justify-center ${slot === s.time ? 'border-brand-600 bg-brand-50' : s.available ? 'border-ink-200' : 'border-ink-100 bg-ink-50'}`}
             >
               <Text className={`text-[11.5px] ${slot === s.time ? 'text-brand-700 font-semibold' : s.available ? '' : 'text-ink-300 line-through'}`}>{s.time}</Text>
             </Pressable>
@@ -2160,10 +2578,10 @@ export function RescheduleVisitScreen() {
         </View>
         <View className="mt-4 p-3 bg-ink-50 rounded-card flex-row items-center gap-2">
           <Icon name="calendar-check" size={14} color="#1A6FFF" />
-          <Text className="text-[12px]">New visit request: <Text className="font-bold">{selectedDateLabel} at {slot}</Text></Text>
+          <Text className="text-[12px] flex-1">New visit request: <Text className="font-bold">{selectedDateLabel} at {slot}</Text></Text>
         </View>
         <Btn className="w-full mt-4" disabled={submitting || availability.loading || !!availability.error || !selectedSlotAvailable} onPress={confirmReschedule}>{submitting ? 'Rescheduling...' : 'Confirm Reschedule'}</Btn>
-      </View>
+      </PageBody>
     </Screen>
   );
 }

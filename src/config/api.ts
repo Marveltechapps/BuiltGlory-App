@@ -11,6 +11,8 @@ const DEFAULT_DEV_API_PORT = '5001';
 
 const ENV_KEYS = {
   apiUrl: ['EXPO_PUBLIC_API_URL', 'EXPO_PUBLIC_API_BASE_URL'],
+  /** @deprecated Tunnel/ngrok is not used for local Expo LAN development. */
+  tunnelApiUrl: ['EXPO_PUBLIC_TUNNEL_API_URL'],
   productionApiUrl: ['EXPO_PUBLIC_PRODUCTION_API_URL'],
   apiPort: ['EXPO_PUBLIC_API_PORT'],
 } as const;
@@ -54,24 +56,100 @@ function resolveExpoDevHost() {
   return null;
 }
 
-function resolveDevApiOrigin() {
-  const configured = readEnv(ENV_KEYS.apiUrl);
-  if (configured) return stripTrailingSlashes(configured);
+function isLoopbackHost(hostname: string) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
 
+function isPrivateIpv4Host(hostname: string) {
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+
+  const match = hostname.match(/^172\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+  if (!match) return false;
+
+  const secondOctet = Number(match[1]);
+  return secondOctet >= 16 && secondOctet <= 31;
+}
+
+function isLikelyLanOnlyHost(hostname: string) {
+  return isLoopbackHost(hostname) || isPrivateIpv4Host(hostname);
+}
+
+function isTunnelExpoHost(hostname: string | null) {
+  if (!hostname) return false;
+  return !isLikelyLanOnlyHost(hostname);
+}
+
+function rewriteDevOriginForDevice(origin: string, fallbackPort: string) {
+  try {
+    const url = new URL(origin);
+    const port = url.port || fallbackPort;
+
+    // Android emulator reaches the host machine via 10.0.2.2, not localhost.
+    if (Platform.OS === 'android' && !Device.isDevice && isLoopbackHost(url.hostname)) {
+      return `http://10.0.2.2:${port}`;
+    }
+
+    const devHost = resolveExpoDevHost();
+    const expoOnLan = Boolean(devHost && isPrivateIpv4Host(devHost));
+    const originIsLocal =
+      isLoopbackHost(url.hostname) || isPrivateIpv4Host(url.hostname);
+
+    // Physical device / simulator on LAN: keep the API port, but follow Expo's
+    // current LAN host. That way a stale .env IP or Metro moving 8081→8082
+    // cannot break API calls (Metro's port is never used as the API port).
+    if (expoOnLan && originIsLocal && url.hostname !== devHost) {
+      return `http://${devHost}:${port}`;
+    }
+
+    if (isLoopbackHost(url.hostname) && (Device.isDevice || Platform.OS === 'ios')) {
+      if (devHost && !isLoopbackHost(devHost) && !isTunnelExpoHost(devHost)) {
+        return `http://${devHost}:${port}`;
+      }
+    }
+
+    return origin;
+  } catch {
+    return origin;
+  }
+}
+
+function resolveDevApiOrigin() {
+  const port = readEnv(ENV_KEYS.apiPort) || DEFAULT_DEV_API_PORT;
+  const configured = readEnv(ENV_KEYS.apiUrl);
+  const configuredTunnel = readEnv(ENV_KEYS.tunnelApiUrl);
+  const configuredProduction = readEnv(ENV_KEYS.productionApiUrl);
   const devHost = resolveExpoDevHost();
-  if (devHost) {
-    const port = readEnv(ENV_KEYS.apiPort) || DEFAULT_DEV_API_PORT;
+  const usingExpoTunnel = isTunnelExpoHost(devHost);
+
+  // Prefer Expo's advertised LAN host so DHCP IP changes never require .env edits.
+  if (devHost && isPrivateIpv4Host(devHost)) {
+    if (configured) {
+      return rewriteDevOriginForDevice(stripTrailingSlashes(configured), port);
+    }
     return `http://${devHost}:${port}`;
   }
 
-  // Android emulator: host machine loopback alias (physical devices use LAN IP via EXPO_PUBLIC_API_URL).
+  if (usingExpoTunnel) {
+    if (configuredTunnel) return stripTrailingSlashes(configuredTunnel);
+    if (configuredProduction) return stripTrailingSlashes(configuredProduction);
+  }
+
+  if (configured) {
+    return rewriteDevOriginForDevice(stripTrailingSlashes(configured), port);
+  }
+
+  if (devHost) {
+    return `http://${devHost}:${port}`;
+  }
+
+  // Android emulator: host machine loopback alias.
   if (Platform.OS === 'android' && !Device.isDevice) {
-    const port = readEnv(ENV_KEYS.apiPort) || DEFAULT_DEV_API_PORT;
     return `http://10.0.2.2:${port}`;
   }
 
   throw new Error(
-    'EXPO_PUBLIC_API_URL is not set. Add your computer\'s LAN IP (e.g. http://192.168.1.8:5001) to Customer-App-V1/.env and restart Expo.',
+    'Could not resolve a LAN API URL. Start Expo with `npm start` (LAN mode) on the same Wi-Fi as the device, or set EXPO_PUBLIC_API_PORT (default 5001).',
   );
 }
 
@@ -125,6 +203,7 @@ export type ApiConfigDiagnostics = {
   apiBaseUrl: string;
   env: {
     EXPO_PUBLIC_API_URL?: string;
+    EXPO_PUBLIC_TUNNEL_API_URL?: string;
     EXPO_PUBLIC_PRODUCTION_API_URL?: string;
     EXPO_PUBLIC_API_PORT?: string;
   };
@@ -138,6 +217,7 @@ export function getApiConfigDiagnostics(): ApiConfigDiagnostics {
     apiBaseUrl: getApiBaseUrl(),
     env: {
       EXPO_PUBLIC_API_URL: readEnv(ENV_KEYS.apiUrl) ?? extra?.EXPO_PUBLIC_API_URL,
+      EXPO_PUBLIC_TUNNEL_API_URL: readEnv(ENV_KEYS.tunnelApiUrl) ?? extra?.EXPO_PUBLIC_TUNNEL_API_URL,
       EXPO_PUBLIC_PRODUCTION_API_URL:
         readEnv(ENV_KEYS.productionApiUrl) ?? extra?.EXPO_PUBLIC_PRODUCTION_API_URL,
       EXPO_PUBLIC_API_PORT: readEnv(ENV_KEYS.apiPort) ?? extra?.EXPO_PUBLIC_API_PORT,
